@@ -19,6 +19,7 @@
     --muted: #9b93b8;
     --border: #322b47;
     --border2: #3d3556;
+    --radius: 12px;
   }
   html, body { height: 100%; }
   body {
@@ -234,7 +235,7 @@
     flex-direction: column;
     gap: 8px;
     justify-content: center;
-    min-width: 240px;
+    min-width: 210px;
   }
   .ctrl-row {
     display: flex;
@@ -262,25 +263,9 @@
   .ctrl-row .val {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.7rem;
-    min-width: 60px;
+    min-width: 40px;
     text-align: right;
     color: var(--text);
-  }
-  .ctrl-row .color-group {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    flex: 1;
-    justify-content: flex-end;
-  }
-  .color-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.65rem;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
   }
 
   #capture-row { display: flex; gap: 8px; align-items: stretch; }
@@ -458,12 +443,9 @@
         <span class="val" id="opacity-val">90</span>
       </div>
       <div class="ctrl-row">
-        <label>Cores</label>
-        <div class="color-group">
-          <span class="color-chip">rosto <input type="color" id="color" value="#ff6b35" aria-label="Cor do rosto"></span>
-          <span class="color-chip">olhos <input type="color" id="color-eyes" value="#ff3a6b" aria-label="Cor dos olhos"></span>
-          <span class="color-chip">boca <input type="color" id="color-mouth" value="#b06cff" aria-label="Cor da boca"></span>
-        </div>
+        <label for="color">Cor</label>
+        <input type="color" id="color" value="#ff6b35">
+        <span class="val" id="color-val">#ff6b35</span>
       </div>
       <div id="capture-row">
         <button id="btn-capture" type="button" disabled>📸 Capturar</button>
@@ -487,13 +469,11 @@
 
 <script type="module">
 /* =========================================================================
-   Filtros de Fantasia — Halloween (v2)
-   Correções principais:
-   - Chifres, coroa e diabo agora ancorados na testa (topo estável do rosto)
-   - Sistema de coordenadas unificado via "face frame" (cx, cy, fw, fh, ang)
-   - Ângulo do rosto limitado a ±35° para evitar filtros "torcidos"
-   - Detecção de perfil reduz opacidade de filtros simétricos
-   - Novos filtros: Múmia, Pirata (baseados no que funcionou bem)
+   Filtros de Fantasia — Halloween
+   Substituições nesta versão:
+   - Bruxa  → Múmia 🧻 (máscara, withFace)
+   - Diabo  → Duende 🧝 (orelhas em withTopAnchor + rosto em withFace)
+   - Neon   → Alien 👽 (máscara, withFace)
    ========================================================================= */
 
 import { FaceLandmarker, FilesetResolver }
@@ -504,14 +484,10 @@ const MODEL_URL =
 const WASM_URL =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/wasm";
 const CAPTURE_MAX_SIDE = 1920;
-const MIN_CAPTURE_SHORT_SIDE = 720;
 const TIMER_OPTIONS = [0, 3, 5, 10];
+const MIN_CAPTURE_SHORT_SIDE = 720;
 const TOAST_DURATION_MS = 2400;
 const TOAST_ERROR_DURATION_MS = 4800;
-const ANGLE_SMOOTHING = 0.25;
-const FACE_COLLAPSE_RATIO = 0.35;
-const MAX_ANGLE = (35 * Math.PI) / 180;
-const PROFILE_RATIO = 0.55; // fw/fh abaixo disso = perfil aproximado
 
 /* ------------------------------- DOM ----------------------------------- */
 const $video        = document.getElementById('video');
@@ -535,9 +511,8 @@ const $intensity    = document.getElementById('intensity');
 const $intensityVal = document.getElementById('intensity-val');
 const $opacity      = document.getElementById('opacity');
 const $opacityVal   = document.getElementById('opacity-val');
-const $colorFace    = document.getElementById('color');
-const $colorEyes    = document.getElementById('color-eyes');
-const $colorMouth   = document.getElementById('color-mouth');
+const $color        = document.getElementById('color');
+const $colorVal     = document.getElementById('color-val');
 const $toast        = document.getElementById('toast');
 const $resultModal  = document.getElementById('result-modal');
 const $resultImg    = document.getElementById('result-img');
@@ -553,9 +528,7 @@ const state = {
   filter: 'none',
   intensity: 70,
   opacity: 90,
-  colorFace: '#ff6b35',
-  colorEyes: '#ff3a6b',
-  colorMouth: '#b06cff',
+  color: '#ff6b35',
   landmarker: null,
   landmarkerLoading: null,
   lastVideoTime: -1,
@@ -564,12 +537,12 @@ const state = {
   rafId: null,
   capturing: false,
   staticImage: null,
-  dpr: window.devicePixelRatio || 1,
-  smoothing: { angle: null, width: null, cx: null, cy: null }
+  dpr: window.devicePixelRatio || 1
 };
 
 /* ------------------------------ Utilidades ----------------------------- */
 const toastTimers = new WeakMap();
+
 function toast(msg, isError = false) {
   $toast.textContent = msg;
   $toast.classList.toggle('err', isError);
@@ -581,36 +554,32 @@ function toast(msg, isError = false) {
 }
 
 function hexToRgb(hex) {
-  let h = String(hex || '').replace('#', '').trim();
+  let h = hex.replace('#', '').trim();
   if (h.length === 3) h = h.split('').map(c => c + c).join('');
   if (h.length !== 6 || !/^[0-9a-fA-F]{6}$/.test(h)) return { r: 255, g: 107, b: 53 };
   const n = parseInt(h, 16);
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
 }
+
 function rgba(hex, a = 1) {
   const { r, g, b } = hexToRgb(hex);
   const alpha = Math.max(0, Math.min(1, a));
   return `rgba(${r},${g},${b},${alpha})`;
 }
+
 function mixHex(hex, target, t) {
   const a = hexToRgb(hex);
   const b = hexToRgb(target);
-  const k = Math.max(0, Math.min(1, t));
-  return `rgb(${Math.round(a.r + (b.r - a.r) * k)},${Math.round(a.g + (b.g - a.g) * k)},${Math.round(a.b + (b.b - a.b) * k)})`;
+  const m = v1 => Math.round(v1);
+  const r = m(a.r + (b.r - a.r) * t);
+  const g = m(a.g + (b.g - a.g) * t);
+  const bl = m(a.b + (b.b - a.b) * t);
+  return `rgb(${r},${g},${bl})`;
 }
-function dist(p1, p2) { return Math.hypot(p1.x - p2.x, p1.y - p2.y); }
-function smooth(prev, next, alpha) {
-  if (prev === null || !Number.isFinite(prev)) return next;
-  return prev + (next - prev) * alpha;
+
+function dist(p1, p2) {
+  return Math.hypot(p1.x - p2.x, p1.y - p2.y);
 }
-function angleLerp(prev, next, alpha) {
-  if (prev === null || !Number.isFinite(prev)) return next;
-  let d = next - prev;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
-  return prev + d * alpha;
-}
-function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 /* ------------------------- Geometria centralizada ---------------------- */
 function fitCover(srcW, srcH, dstW, dstH) {
@@ -635,7 +604,49 @@ function landmarksToStage(landmarks, srcW, srcH, dstW, dstH, mirror) {
   return out;
 }
 
-/** Converte coordenada global para o "referencial do rosto" (centro + ângulo). */
+function eyeCenters(p) {
+  return {
+    left:  { x: (p[33].x + p[133].x) / 2,  y: (p[33].y + p[133].y) / 2  },
+    right: { x: (p[362].x + p[263].x) / 2, y: (p[362].y + p[263].y) / 2 }
+  };
+}
+
+function mouthCenter(p) {
+  return { x: (p[13].x + p[14].x) / 2, y: (p[13].y + p[14].y) / 2 };
+}
+
+function faceAngle(p) {
+  const l = p[33];
+  const r = p[263];
+  return Math.atan2(r.y - l.y, r.x - l.x);
+}
+
+function computeFaceContext(p) {
+  const cx = (p[234].x + p[454].x) / 2;
+  const cy = (p[10].y + p[152].y) / 2;
+  const fw = dist(p[234], p[454]);
+  const fh = dist(p[10], p[152]);
+  const ang = faceAngle(p);
+
+  const eyes = eyeCenters(p);
+  const eyeCenterX = (eyes.left.x + eyes.right.x) / 2;
+  const eyeCenterY = (eyes.left.y + eyes.right.y) / 2;
+  const topAnchor = {
+    x: eyeCenterX,
+    y: eyeCenterY - fh * 0.42
+  };
+
+  return {
+    cx, cy, fw, fh, ang,
+    eyes,
+    mouth: mouthCenter(p),
+    nose: p[1],
+    top: p[10],
+    chin: p[152],
+    topAnchor
+  };
+}
+
 function toLocal(pt, fc) {
   const dx = pt.x - fc.cx;
   const dy = pt.y - fc.cy;
@@ -644,172 +655,21 @@ function toLocal(pt, fc) {
   return { x: dx * c - dy * s, y: dx * s + dy * c };
 }
 
-/** Aplica transformação (translate+rotate) para desenhar no referencial do rosto. */
-function withFace(c, fc, fn) {
-  c.save();
-  c.translate(fc.cx, fc.cy);
-  c.rotate(fc.ang);
-  try { fn(); } finally { c.restore(); }
-}
-
-/**
- * Calcula a linha dos olhos e a "linha das sobrancelhas" — mais estáveis que
- * o topo da testa (p[10]) em perfis. Retorna coordenadas no referencial do rosto.
- */
-function stableFaceAxis(p, fc) {
-  const leftBrow  = p[70];   // sobrancelha esquerda
-  const rightBrow = p[300];  // sobrancelha direita
-  const leftEye   = p[33];
-  const rightEye  = p[263];
-
-  // Centro das sobrancelhas (em coords globais), convertido ao referencial do rosto
-  const browCenter = (leftBrow && rightBrow)
-    ? toLocal({ x: (leftBrow.x + rightBrow.x) / 2, y: (leftBrow.y + rightBrow.y) / 2 }, fc)
-    : { x: 0, y: -fc.fh * 0.28 };
-
-  // Topo do rosto: ponto entre as sobrancelhas, deslocado um pouco para cima
-  const topOfFace = { x: browCenter.x, y: browCenter.y - fc.fh * 0.10 };
-
-  // Largura na linha dos olhos (mais estável que a largura total em perfis)
-  const eyeSpan = (leftEye && rightEye) ? dist(leftEye, rightEye) : fc.fw;
-
-  return { browCenter, topOfFace, eyeSpan };
-}
-
-function stableFaceAngle(p) {
-  const pairs = [
-    [p[33], p[263]],
-    [p[133], p[362]],
-    [p[70], p[300]]
-  ];
-  let sx = 0, sy = 0, wsum = 0;
-  for (const [a, b] of pairs) {
-    if (!a || !b) continue;
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const len = Math.hypot(dx, dy);
-    if (len < 1e-3) continue;
-    const w = len;
-    sx += (dx / len) * w;
-    sy += (dy / len) * w;
-    wsum += w;
-  }
-  if (wsum < 1e-3) return 0;
-  return Math.atan2(sy, sx);
-}
-
-function eyeInfo(p, a, b, c, d) {
-  if (!p[a] || !p[b]) return null;
-  const center = { x: (p[a].x + p[b].x) / 2, y: (p[a].y + p[b].y) / 2 };
-  const radius = Math.max(1, dist(p[a], p[b]) * 0.5);
-  if (p[c] && p[d]) {
-    center.x = (center.x + (p[c].x + p[d].x) / 2) / 2;
-    center.y = (center.y + (p[c].y + p[d].y) / 2) / 2;
-  }
-  return { center, radius };
-}
-
-function eyeCenters(p) {
-  return {
-    left:  eyeInfo(p, 33, 133, 159, 145),
-    right: eyeInfo(p, 362, 263, 386, 374)
-  };
-}
-
-function mouthInfo(p) {
-  const ids = [13, 14, 61, 291];
-  let sx = 0, sy = 0, n = 0;
-  for (const i of ids) {
-    if (!p[i]) continue;
-    sx += p[i].x; sy += p[i].y; n++;
-  }
-  if (n === 0) return null;
-  return {
-    center: { x: sx / n, y: sy / n },
-    width: (p[61] && p[291]) ? dist(p[61], p[291]) : 0,
-    height: (p[13] && p[14]) ? dist(p[13], p[14]) : 0
-  };
-}
-
-function noseInfo(p) {
-  if (!p[4] || !p[6]) return p[1] ? { center: p[1], tip: p[1] } : null;
-  return { center: { x: (p[4].x + p[6].x) / 2, y: (p[4].y + p[6].y) / 2 }, tip: p[1] || null };
-}
-
-/**
- * Contexto completo do rosto — tudo em pixels da tela (canvas).
- * - cx, cy: centro do rosto
- * - fw, fh: largura e altura
- * - ang: ângulo (limitado a ±MAX_ANGLE)
- * - browY: Y local da linha das sobrancelhas (negativo = acima do centro)
- * - topY: Y local do topo do rosto (onde ficam chapéus/coroas)
- * - profile: true se o rosto estiver virado (afeta opacidade de filtros simétricos)
- */
-function computeFaceContext(p, state) {
-  const cxRaw = (p[234].x + p[454].x) / 2;
-  const cyRaw = (p[10].y + p[152].y) / 2;
-  const widthRaw = dist(p[234], p[454]);
-  const height = dist(p[10], p[152]);
-  const collapsed = height > 0 && widthRaw < height * FACE_COLLAPSE_RATIO;
-  const s = state.smoothing;
-
-  if (!collapsed) s.width = smooth(s.width, widthRaw, 0.35);
-  if (s.width === null) s.width = widthRaw;
-  s.cx = smooth(s.cx, cxRaw, 0.35);
-  s.cy = smooth(s.cy, cyRaw, 0.35);
-
-  const angleRaw = stableFaceAngle(p);
-  s.angle = angleLerp(s.angle, angleRaw, ANGLE_SMOOTHING);
-
-  // Limita o ângulo para evitar filtros "torcidos"
-  const ang = clamp(s.angle ?? 0, -MAX_ANGLE, MAX_ANGLE);
-
-  const fc = {
-    cx: s.cx,
-    cy: s.cy,
-    fw: s.width,
-    fh: height,
-    ang,
-    eyes: eyeCenters(p),
-    mouth: mouthInfo(p),
-    nose: noseInfo(p),
-    top: p[10],
-    chin: p[152],
-    left: p[234],
-    right: p[454]
-  };
-
-  // Linha das sobrancelhas / topo do rosto (referencial local)
-  const axis = stableFaceAxis(p, fc);
-  fc.browY = axis.browCenter.y;
-  fc.topY = axis.topOfFace.y;
-  fc.eyeSpan = axis.eyeSpan;
-
-  // Perfil: largura relativa à altura
-  fc.profile = height > 0 && (fc.fw / height) < PROFILE_RATIO;
-  // Opacidade efetiva para filtros simétricos (chifres, coroa, etc.)
-  fc.symmetryAlpha = fc.profile ? 0.55 : 1;
-
-  return fc;
-}
-
 /* -------------------------- Filtros disponíveis ------------------------ */
 const FILTERS = [
   { id: 'none',     name: 'Sem filtro',  emoji: '🚫' },
   { id: 'pumpkin',  name: 'Abóbora',     emoji: '🎃' },
   { id: 'skull',    name: 'Caveira',     emoji: '💀' },
   { id: 'vampire',  name: 'Vampiro',     emoji: '🧛' },
-  { id: 'crown',    name: 'Coroa',       emoji: '👑' },
+  { id: 'mummy',    name: 'Múmia',       emoji: '🧻' },
   { id: 'zombie',   name: 'Zumbi',       emoji: '🧟' },
-  { id: 'horns',    name: 'Chifres',     emoji: '😈' },
+  { id: 'cat',      name: 'Gato',        emoji: '🐱' },
   { id: 'clown',    name: 'Palhaço',     emoji: '🤡' },
   { id: 'ghost',    name: 'Fantasma',    emoji: '👻' },
-  { id: 'devil',    name: 'Diabo',       emoji: '👹' },
+  { id: 'goblin',   name: 'Duende',      emoji: '🧝' },
   { id: 'skeleton', name: 'Esqueleto',   emoji: '☠️' },
-  { id: 'mummy',    name: 'Múmia',       emoji: '🧻' },
-  { id: 'pirate',   name: 'Pirata',      emoji: '🏴‍☠️' },
-  { id: 'glow',     name: 'Olhos Glow',  emoji: '✨' },
-  { id: 'aura',     name: 'Aura',        emoji: '🌟' }
+  { id: 'alien',    name: 'Alien',       emoji: '👽' },
+  { id: 'glow',     name: 'Olhos Glow',  emoji: '✨' }
 ];
 
 function buildFilterButtons() {
@@ -827,14 +687,17 @@ function buildFilterButtons() {
   }
   $filtersScroll.appendChild(frag);
 }
+
 function selectFilter(id) {
   state.filter = id;
-  for (const b of $filtersScroll.querySelectorAll('.filter-btn')) {
+  const buttons = $filtersScroll.querySelectorAll('.filter-btn');
+  for (const b of buttons) {
     const on = b.dataset.id === id;
     b.classList.toggle('active', on);
     b.setAttribute('aria-selected', on ? 'true' : 'false');
   }
 }
+
 buildFilterButtons();
 
 /* ------------------------------ Controles ------------------------------ */
@@ -846,9 +709,10 @@ $opacity.addEventListener('input', () => {
   state.opacity = Number($opacity.value) || 0;
   $opacityVal.textContent = String(state.opacity);
 });
-$colorFace.addEventListener('input', () => { state.colorFace = $colorFace.value; });
-$colorEyes.addEventListener('input', () => { state.colorEyes = $colorEyes.value; });
-$colorMouth.addEventListener('input', () => { state.colorMouth = $colorMouth.value; });
+$color.addEventListener('input', () => {
+  state.color = $color.value;
+  $colorVal.textContent = state.color;
+});
 
 $btnMirror.addEventListener('click', () => {
   state.mirror = !state.mirror;
@@ -925,7 +789,11 @@ async function startCamera(facing = state.facingMode) {
   let stream = null;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      video: {
+        facingMode: { ideal: facing },
+        width:  { ideal: 1920 },
+        height: { ideal: 1080 }
+      },
       audio: false
     });
   } catch (err) {
@@ -946,50 +814,49 @@ async function startCamera(facing = state.facingMode) {
     await $video.play();
   } catch (err) {
     console.warn('[startCamera] play falhou', err);
-    toast('Não foi possível iniciar a prévia.', true);
+    toast('Não foi possível iniciar a prévia do vídeo.', true);
     stopCamera();
     return;
   }
 
-  try { await initLandmarker(); }
-  catch { stopCamera(); return; }
+  try {
+    await initLandmarker();
+  } catch {
+    stopCamera();
+    return;
+  }
 
   document.body.classList.add('cam-on');
   $btnCapture.disabled = false;
 
   resizeCanvas();
-  resetSmoothing();
   state.running = true;
   state.lastVideoTime = -1;
   loopDetect();
   toast('Câmera ativa 📷');
 }
 
-function resetSmoothing() {
-  state.smoothing.angle = null;
-  state.smoothing.width = null;
-  state.smoothing.cx = null;
-  state.smoothing.cy = null;
-}
-
 function stopCamera() {
   state.running = false;
   if (state.rafId) cancelAnimationFrame(state.rafId);
   state.rafId = null;
+
   if (state.stream) {
     for (const track of state.stream.getTracks()) track.stop();
     state.stream = null;
   }
   $video.srcObject = null;
+
   state.faces = [];
   state.lastVideoTime = -1;
   ctx.clearRect(0, 0, $overlay.width, $overlay.height);
+
   $btnCapture.disabled = true;
   document.body.classList.remove('cam-on');
-  resetSmoothing();
 }
 
 $btnStart.addEventListener('click', () => startCamera());
+
 $btnCamera.addEventListener('click', () => {
   const next = state.facingMode === 'user' ? 'environment' : 'user';
   $fileFallback.setAttribute('capture', next);
@@ -1015,11 +882,13 @@ async function loadImageFile(file) {
     $placeholder.style.display = 'none';
     $btnCapture.disabled = false;
 
-    try { await initLandmarker(); }
-    catch { return; }
+    try {
+      await initLandmarker();
+    } catch {
+      return;
+    }
 
     resizeCanvas();
-    resetSmoothing();
     renderStaticImage(img);
     toast('Foto carregada. Aplique o filtro e capture.');
   } catch (err) {
@@ -1035,7 +904,9 @@ $fileFallback.addEventListener('change', (e) => {
   e.target.value = '';
   loadImageFile(f);
 });
+
 $btnUpload.addEventListener('click', () => $fileUpload.click());
+
 $fileUpload.addEventListener('change', (e) => {
   const f = e.target.files?.[0];
   e.target.value = '';
@@ -1076,6 +947,7 @@ window.addEventListener('orientationchange', scheduleResize);
 /* --------------------------- Loop de detecção ------------------------- */
 function loopDetect() {
   if (!state.running) return;
+
   const now = performance.now();
   if (state.landmarker && $video.readyState >= 2 && $video.currentTime !== state.lastVideoTime) {
     state.lastVideoTime = $video.currentTime;
@@ -1088,6 +960,7 @@ function loopDetect() {
       }
     }
   }
+
   updateFaceStatus();
   drawPreview();
   state.rafId = requestAnimationFrame(loopDetect);
@@ -1104,10 +977,13 @@ function updateFaceStatus() {
 
 function drawPreview() {
   const rect = $stage.getBoundingClientRect();
-  const W = rect.width, H = rect.height;
+  const W = rect.width;
+  const H = rect.height;
   ctx.clearRect(0, 0, W, H);
+
   if (state.faces.length === 0) return;
-  const srcW = $video.videoWidth, srcH = $video.videoHeight;
+  const srcW = $video.videoWidth;
+  const srcH = $video.videoHeight;
   if (!srcW || !srcH) return;
 
   for (const face of state.faces) {
@@ -1119,12 +995,17 @@ function drawPreview() {
 function renderStaticImage(img) {
   resizeCanvas();
   const rect = $stage.getBoundingClientRect();
-  const W = rect.width, H = rect.height;
+  const W = rect.width;
+  const H = rect.height;
 
   ctx.clearRect(0, 0, W, H);
+
   const fit = fitCover(img.width, img.height, W, H);
   ctx.save();
-  if (state.mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+  if (state.mirror) {
+    ctx.translate(W, 0);
+    ctx.scale(-1, 1);
+  }
   ctx.drawImage(img, fit.dx, fit.dy, fit.dw, fit.dh);
   ctx.restore();
 
@@ -1137,6 +1018,7 @@ function renderStaticImage(img) {
     console.warn('[renderStaticImage] detect falhou', err);
     state.faces = [];
   }
+
   updateFaceStatus();
 
   for (const face of state.faces) {
@@ -1146,55 +1028,65 @@ function renderStaticImage(img) {
 }
 
 /* =========================================================================
-   FILTROS
+   FILTROS — helpers de referencial
    ========================================================================= */
+function withFace(c, fc, fn) {
+  c.save();
+  c.translate(fc.cx, fc.cy);
+  c.rotate(fc.ang);
+  try { fn(); } finally { c.restore(); }
+}
+
+function withTopAnchor(c, fc, fn) {
+  c.save();
+  c.translate(fc.topAnchor.x, fc.topAnchor.y);
+  c.rotate(fc.ang);
+  try { fn(); } finally { c.restore(); }
+}
+
 function drawFilter(c, p, W, H, st) {
   if (st.filter === 'none') return;
   if (!p || p.length < 468) return;
 
   const I = Math.max(0, Math.min(1, st.intensity / 100));
   const A = Math.max(0, Math.min(1, st.opacity / 100));
-  const fc = computeFaceContext(p, st);
+  const color = st.color;
+  const id = st.filter;
 
-  const colors = {
-    face: st.colorFace || '#ff6b35',
-    eyes: st.colorEyes || mixHex(st.colorFace || '#ff6b35', '#ff3a6b', 0.5),
-    mouth: st.colorMouth || mixHex(st.colorFace || '#ff6b35', '#b06cff', 0.5)
-  };
+  const fc = computeFaceContext(p);
 
   c.save();
   c.globalAlpha = A;
   c.lineJoin = 'round';
   c.lineCap = 'round';
 
-  switch (st.filter) {
-    case 'pumpkin':    drawPumpkin(c, fc, colors, I);    break;
-    case 'skull':      drawSkull(c, fc, colors, I);      break;
-    case 'vampire':    drawVampire(c, fc, colors, I);    break;
-    case 'crown':      drawCrown(c, fc, colors, I);      break;
-    case 'zombie':     drawZombie(c, fc, colors, I);     break;
-    case 'horns':      drawHorns(c, fc, colors, I);      break;
-    case 'clown':      drawClown(c, fc, colors, I);      break;
-    case 'ghost':      drawGhost(c, fc, colors, I);      break;
-    case 'devil':      drawDevil(c, fc, colors, I);      break;
-    case 'skeleton':   drawSkeleton(c, fc, colors, I);   break;
-    case 'mummy':      drawMummy(c, fc, colors, I);      break;
-    case 'pirate':     drawPirate(c, fc, colors, I);     break;
-    case 'glow':       drawGlow(c, fc, colors, I);       break;
-    case 'aura':       drawAura(c, fc, colors, I);       break;
+  switch (id) {
+    case 'pumpkin':    drawPumpkin(c, p, fc, color, I);    break;
+    case 'skull':      drawSkull(c, p, fc, color, I);      break;
+    case 'vampire':    drawVampire(c, p, fc, color, I);    break;
+    case 'mummy':      drawMummy(c, p, fc, color, I);      break;
+    case 'zombie':     drawZombie(c, p, fc, color, I);     break;
+    case 'cat':        drawCat(c, p, fc, color, I);        break;
+    case 'clown':      drawClown(c, p, fc, color, I);      break;
+    case 'ghost':      drawGhost(c, p, fc, color, I);      break;
+    case 'goblin':     drawGoblin(c, p, fc, color, I);     break;
+    case 'skeleton':   drawSkeleton(c, p, fc, color, I);   break;
+    case 'alien':      drawAlien(c, p, fc, color, I);      break;
+    case 'glow':       drawGlow(c, p, fc, color, I);       break;
   }
+
   c.restore();
 }
 
 /* ------------------------------ Abóbora -------------------------------- */
-function drawPumpkin(c, fc, colors, I) {
+function drawPumpkin(c, p, fc, color, I) {
   const rx = fc.fw * 0.62;
   const ry = fc.fh * 0.62;
 
   withFace(c, fc, () => {
     const grd = c.createRadialGradient(0, 0, rx * 0.2, 0, 0, rx);
-    grd.addColorStop(0, mixHex(colors.face, '#ffb066', 0.5));
-    grd.addColorStop(1, mixHex(colors.face, '#5a1d00', 0.45));
+    grd.addColorStop(0, mixHex(color, '#ffb066', 0.5));
+    grd.addColorStop(1, mixHex(color, '#5a1d00', 0.45));
     c.fillStyle = grd;
     c.globalAlpha *= 0.55 * I;
     c.beginPath();
@@ -1211,36 +1103,30 @@ function drawPumpkin(c, fc, colors, I) {
     }
 
     c.fillStyle = '#1a0a00';
-    const eyeR = (fc.eyes.left?.radius || rx * 0.14) * 1.35;
+    const eyeR = rx * 0.18;
     for (const e of [fc.eyes.left, fc.eyes.right]) {
-      if (!e) continue;
-      const ep = toLocal(e.center, fc);
-      const rr = Math.max(eyeR, e.radius * 1.3);
+      const ep = toLocal(e, fc);
       c.beginPath();
-      c.moveTo(ep.x - rr, ep.y - rr * 0.7);
-      c.lineTo(ep.x + rr, ep.y - rr * 0.7);
-      c.lineTo(ep.x, ep.y + rr * 0.7);
+      c.moveTo(ep.x - eyeR, ep.y - eyeR * 0.7);
+      c.lineTo(ep.x + eyeR, ep.y - eyeR * 0.7);
+      c.lineTo(ep.x, ep.y + eyeR * 0.7);
       c.closePath();
       c.fill();
     }
 
-    if (fc.mouth) {
-      const mp = toLocal(fc.mouth.center, fc);
-      const mouthW = Math.max(fc.mouth.width * 1.15, rx * 0.5);
-      const mouthH = Math.max(fc.mouth.height * 1.4, ry * 0.22);
-      c.beginPath();
-      c.moveTo(mp.x - mouthW / 2, mp.y - mouthH * 0.15);
-      c.lineTo(mp.x - mouthW * 0.28, mp.y + mouthH * 0.35);
-      c.lineTo(mp.x - mouthW * 0.10, mp.y - mouthH * 0.10);
-      c.lineTo(mp.x + mouthW * 0.05, mp.y + mouthH * 0.45);
-      c.lineTo(mp.x + mouthW * 0.20, mp.y - mouthH * 0.10);
-      c.lineTo(mp.x + mouthW * 0.35, mp.y + mouthH * 0.30);
-      c.lineTo(mp.x + mouthW / 2, mp.y - mouthH * 0.15);
-      c.lineTo(mp.x + mouthW / 2, mp.y + mouthH * 0.55);
-      c.lineTo(mp.x - mouthW / 2, mp.y + mouthH * 0.55);
-      c.closePath();
-      c.fill();
-    }
+    const mp = toLocal(fc.mouth, fc);
+    c.beginPath();
+    c.moveTo(mp.x - rx * 0.28, mp.y - ry * 0.1);
+    c.lineTo(mp.x - rx * 0.12, mp.y + ry * 0.12);
+    c.lineTo(mp.x - rx * 0.02, mp.y - ry * 0.05);
+    c.lineTo(mp.x + rx * 0.08, mp.y + ry * 0.14);
+    c.lineTo(mp.x + rx * 0.2,  mp.y - ry * 0.05);
+    c.lineTo(mp.x + rx * 0.3,  mp.y + ry * 0.1);
+    c.lineTo(mp.x + rx * 0.3,  mp.y + ry * 0.25);
+    c.lineTo(mp.x - rx * 0.28, mp.y + ry * 0.25);
+    c.closePath();
+    c.fillStyle = '#1a0a00';
+    c.fill();
 
     c.fillStyle = '#2e7d32';
     c.beginPath();
@@ -1250,739 +1136,570 @@ function drawPumpkin(c, fc, colors, I) {
 }
 
 /* ------------------------------ Caveira -------------------------------- */
-function drawSkull(c, fc, colors, I) {
+function drawSkull(c, p, fc, color, I) {
+  const fw = fc.fw;
+  const fh = fc.fh;
+
   withFace(c, fc, () => {
-    c.globalAlpha = 0.82 * I;
+    c.globalAlpha *= 0.78 * I;
 
     for (const e of [fc.eyes.left, fc.eyes.right]) {
-      if (!e) continue;
-      const ep = toLocal(e.center, fc);
-      const rx = e.radius * 1.35;
-      const ry = e.radius * 1.05;
-
-      c.fillStyle = 'rgba(0,0,0,0.9)';
+      const ep = toLocal(e, fc);
+      c.fillStyle = 'rgba(0,0,0,0.88)';
       c.beginPath();
-      c.ellipse(ep.x, ep.y, rx, ry, 0, 0, Math.PI * 2);
+      c.ellipse(ep.x, ep.y, fw * 0.13, fh * 0.10, 0, 0, Math.PI * 2);
       c.fill();
 
-      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, rx);
-      g.addColorStop(0, rgba(colors.eyes, 0.95));
+      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, fw * 0.13);
+      g.addColorStop(0, rgba(color, 0.9));
       g.addColorStop(1, 'rgba(0,0,0,0)');
       c.fillStyle = g;
       c.beginPath();
-      c.ellipse(ep.x, ep.y, rx, ry, 0, 0, Math.PI * 2);
+      c.ellipse(ep.x, ep.y, fw * 0.13, fh * 0.10, 0, 0, Math.PI * 2);
       c.fill();
     }
 
-    if (fc.nose) {
-      const np = toLocal(fc.nose.center, fc);
-      c.fillStyle = 'rgba(0,0,0,0.85)';
-      c.beginPath();
-      c.moveTo(np.x, np.y - fc.fh * 0.04);
-      c.lineTo(np.x - fc.fw * 0.05, np.y + fc.fh * 0.06);
-      c.lineTo(np.x + fc.fw * 0.05, np.y + fc.fh * 0.06);
-      c.closePath();
-      c.fill();
-    }
+    const np = toLocal(fc.nose, fc);
+    c.fillStyle = 'rgba(0,0,0,0.8)';
+    c.beginPath();
+    c.moveTo(np.x, np.y - fh * 0.04);
+    c.lineTo(np.x - fw * 0.05, np.y + fh * 0.06);
+    c.lineTo(np.x + fw * 0.05, np.y + fh * 0.06);
+    c.closePath();
+    c.fill();
 
-    if (fc.mouth) {
-      const mp = toLocal(fc.mouth.center, fc);
-      const tw = Math.max(fc.fw * 0.42, fc.mouth.width * 1.2);
-      const th = Math.max(fc.fh * 0.13, fc.mouth.height * 1.4);
-      c.strokeStyle = 'rgba(0,0,0,0.9)';
-      c.lineWidth = Math.max(2, fc.fw * 0.02);
-      c.strokeRect(mp.x - tw / 2, mp.y - th / 2, tw, th);
-      for (let i = 1; i < 5; i++) {
-        const x = mp.x - tw / 2 + (tw / 5) * i;
-        c.beginPath(); c.moveTo(x, mp.y - th / 2); c.lineTo(x, mp.y + th / 2); c.stroke();
-      }
-      c.beginPath(); c.moveTo(mp.x - tw / 2, mp.y); c.lineTo(mp.x + tw / 2, mp.y); c.stroke();
+    const mp = toLocal(fc.mouth, fc);
+    c.strokeStyle = 'rgba(0,0,0,0.85)';
+    c.lineWidth = Math.max(2, fw * 0.02);
+    const tw = fw * 0.42;
+    const th = fh * 0.13;
+    c.strokeRect(mp.x - tw / 2, mp.y - th / 2, tw, th);
+    for (let i = 1; i < 5; i++) {
+      const x = mp.x - tw / 2 + (tw / 5) * i;
+      c.beginPath(); c.moveTo(x, mp.y - th / 2); c.lineTo(x, mp.y + th / 2); c.stroke();
     }
+    c.beginPath(); c.moveTo(mp.x - tw / 2, mp.y); c.lineTo(mp.x + tw / 2, mp.y); c.stroke();
   });
 }
 
 /* ------------------------------ Vampiro -------------------------------- */
-function drawVampire(c, fc, colors, I) {
+function drawVampire(c, p, fc, color, I) {
+  const fw = fc.fw;
+  const fh = fc.fh;
+
   withFace(c, fc, () => {
-    c.globalAlpha = I;
+    c.globalAlpha *= I;
 
-    if (fc.mouth) {
-      const mp = toLocal(fc.mouth.center, fc);
-      const fangLen = Math.max(fc.mouth.height * 1.6, fc.fh * 0.09);
-      const mouthW = Math.max(fc.mouth.width, fc.fw * 0.22);
+    const mp = toLocal(fc.mouth, fc);
+    const fangLen = fh * 0.09;
+    const mouthW = fw * 0.22;
 
-      c.fillStyle = '#fff';
-      c.strokeStyle = 'rgba(0,0,0,0.35)';
-      c.lineWidth = 1;
-      for (const sign of [-1, 1]) {
-        const baseX = mp.x + sign * mouthW * 0.35;
-        const baseY = mp.y + fc.fh * 0.02;
-        c.beginPath();
-        c.moveTo(baseX - fc.fw * 0.02, baseY);
-        c.lineTo(baseX + fc.fw * 0.02, baseY);
-        c.lineTo(baseX, baseY + fangLen);
-        c.closePath();
-        c.fill();
-        c.stroke();
-      }
-
-      c.fillStyle = rgba(colors.mouth, 0.9);
-      const dripX = mp.x + fc.fw * 0.08;
+    c.fillStyle = '#fff';
+    c.strokeStyle = 'rgba(0,0,0,0.4)';
+    c.lineWidth = 1;
+    for (const sign of [-1, 1]) {
+      const baseX = mp.x + sign * mouthW * 0.35;
+      const baseY = mp.y + fh * 0.02;
       c.beginPath();
-      c.moveTo(dripX, mp.y + fc.fh * 0.05);
-      c.quadraticCurveTo(dripX + fc.fw * 0.03, mp.y + fc.fh * 0.15, dripX, mp.y + fc.fh * 0.22);
-      c.quadraticCurveTo(dripX - fc.fw * 0.03, mp.y + fc.fh * 0.15, dripX, mp.y + fc.fh * 0.05);
+      c.moveTo(baseX - fw * 0.02, baseY);
+      c.lineTo(baseX + fw * 0.02, baseY);
+      c.lineTo(baseX, baseY + fangLen);
+      c.closePath();
       c.fill();
+      c.stroke();
     }
 
+    c.fillStyle = 'rgba(180,0,0,0.85)';
+    const dripX = mp.x + fw * 0.08;
+    c.beginPath();
+    c.moveTo(dripX, mp.y + fh * 0.05);
+    c.quadraticCurveTo(dripX + fw * 0.03, mp.y + fh * 0.15, dripX, mp.y + fh * 0.22);
+    c.quadraticCurveTo(dripX - fw * 0.03, mp.y + fh * 0.15, dripX, mp.y + fh * 0.05);
+    c.fill();
+
     for (const e of [fc.eyes.left, fc.eyes.right]) {
-      if (!e) continue;
-      const ep = toLocal(e.center, fc);
-      const rr = Math.max(e.radius * 1.4, fc.fw * 0.06);
-      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, rr);
-      g.addColorStop(0, rgba(colors.eyes, 1));
-      g.addColorStop(1, rgba(colors.eyes, 0));
+      const ep = toLocal(e, fc);
+      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, fw * 0.08);
+      g.addColorStop(0, 'rgba(255,40,40,0.95)');
+      g.addColorStop(1, 'rgba(120,0,0,0)');
       c.fillStyle = g;
       c.beginPath();
-      c.arc(ep.x, ep.y, rr, 0, Math.PI * 2);
+      c.arc(ep.x, ep.y, fw * 0.08, 0, Math.PI * 2);
       c.fill();
     }
 
     c.globalAlpha = 0.15 * I;
-    c.fillStyle = mixHex(colors.face, '#e8e0f0', 0.6);
+    c.fillStyle = mixHex(color, '#e8e0f0', 0.6);
     c.beginPath();
-    c.ellipse(0, 0, fc.fw * 0.55, fc.fh * 0.55, 0, 0, Math.PI * 2);
+    c.ellipse(0, 0, fw * 0.55, fh * 0.55, 0, 0, Math.PI * 2);
     c.fill();
   });
 }
 
-/* -------------------------------- Coroa -------------------------------- */
-/**
- * CORRIGIDA: usa fc.topY (topo estável via sobrancelhas) e largura fc.fw,
- * o que a mantém assentada na testa e alinhada mesmo com o rosto inclinado.
- * A base da coroa fica no topo do rosto e as pontas sobem em relação ao eixo
- * local (que acompanha a rotação do rosto).
- */
-function drawCrown(c, fc, colors, I) {
-  const bandY = fc.topY + fc.fh * 0.02; // base da coroa, levemente acima das sobrancelhas
-  const bandH = fc.fh * 0.10;
-  const bandW = fc.fw * 1.10;
-  const points = 7;
-  const gold = mixHex(colors.face, '#ffd166', 0.55);
-  const goldLight = mixHex(colors.face, '#fff2b0', 0.65);
-  const goldDark  = mixHex(colors.face, '#7a4c00', 0.6);
+/* -------------------------------- Múmia -------------------------------- */
+function drawMummy(c, p, fc, color, I) {
+  const fw = fc.fw;
+  const fh = fc.fh;
 
   withFace(c, fc, () => {
-    c.globalAlpha = I * fc.symmetryAlpha;
+    c.globalAlpha *= I;
 
-    // Corpo da coroa (banda com perspectiva achatada)
-    const band = c.createLinearGradient(0, bandY - bandH, 0, bandY + bandH);
-    band.addColorStop(0, goldLight);
-    band.addColorStop(0.55, gold);
-    band.addColorStop(1, goldDark);
-    c.fillStyle = band;
+    const bandColor   = mixHex(color, '#efe6cf', 0.85);
+    const bandAlt     = mixHex(color, '#d9cba6', 0.70);
+    const bandShadow  = 'rgba(60,45,25,0.45)';
+    const rx = fw * 0.58;
+    const ry = fh * 0.60;
+
+    c.fillStyle = bandColor;
     c.beginPath();
-    c.moveTo(-bandW / 2, bandY);
-    c.quadraticCurveTo(0, bandY - bandH * 0.55, bandW / 2, bandY);
-    c.quadraticCurveTo(bandW / 2 - bandH * 0.2, bandY + bandH * 0.9, bandW * 0.35, bandY + bandH * 1.05);
-    c.quadraticCurveTo(0, bandY + bandH * 1.35, -bandW * 0.35, bandY + bandH * 1.05);
-    c.quadraticCurveTo(-bandW / 2 + bandH * 0.2, bandY + bandH * 0.9, -bandW / 2, bandY);
-    c.closePath();
+    c.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
     c.fill();
 
-    // Pontas em leque subindo
-    const tipH = bandH * 2.4;
-    for (let i = 0; i < points; i++) {
-      const t = i / (points - 1);
-      const px = -bandW * 0.42 + bandW * 0.84 * t;
-      const lift = Math.sin(t * Math.PI) * bandH * 0.4;
-      const py = bandY - lift;
-      const w = (bandW / points) * 0.42;
-      const tipColor = i % 2 === 0 ? goldLight : gold;
-      c.fillStyle = tipColor;
+    const bands = 7;
+    for (let i = 0; i < bands; i++) {
+      const t = i / (bands - 1);
+      const y = -ry * 0.85 + ry * 1.7 * t;
+      const tilt = (i % 2 === 0 ? 1 : -1) * fh * 0.05;
+      const width = rx * 2.05;
+
+      c.fillStyle = i % 2 === 0 ? bandColor : bandAlt;
       c.beginPath();
-      c.moveTo(px - w, py + bandH * 0.4);
-      c.lineTo(px, py - tipH);
-      c.lineTo(px + w, py + bandH * 0.4);
+      c.moveTo(-width / 2, y - fh * 0.035);
+      c.lineTo(width / 2, y - fh * 0.035 + tilt);
+      c.lineTo(width / 2, y + fh * 0.035 + tilt);
+      c.lineTo(-width / 2, y + fh * 0.035);
       c.closePath();
       c.fill();
 
-      // Pedra na base da ponta
-      c.fillStyle = i === Math.floor(points / 2) ? colors.eyes : colors.mouth;
+      c.strokeStyle = bandShadow;
+      c.lineWidth = Math.max(1, fw * 0.008);
       c.beginPath();
-      c.arc(px, py + bandH * 0.55, bandH * 0.28, 0, Math.PI * 2);
-      c.fill();
-      c.strokeStyle = 'rgba(0,0,0,0.35)';
-      c.lineWidth = Math.max(1, bandH * 0.05);
+      c.moveTo(-width / 2, y + fh * 0.04);
+      c.lineTo(width / 2, y + fh * 0.04 + tilt);
       c.stroke();
     }
 
-    // Brilho central
-    const sheen = c.createRadialGradient(-bandW * 0.15, bandY + bandH * 0.4, 1, -bandW * 0.15, bandY + bandH * 0.4, bandW * 0.5);
-    sheen.addColorStop(0, 'rgba(255,255,255,0.35)');
-    sheen.addColorStop(1, 'rgba(255,255,255,0)');
-    c.fillStyle = sheen;
+    for (const e of [fc.eyes.left, fc.eyes.right]) {
+      const ep = toLocal(e, fc);
+      c.fillStyle = 'rgba(0,0,0,0.92)';
+      c.beginPath();
+      c.ellipse(ep.x, ep.y, fw * 0.10, fh * 0.08, 0, 0, Math.PI * 2);
+      c.fill();
+      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, fw * 0.10);
+      g.addColorStop(0, rgba(color, 0.85));
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = g;
+      c.beginPath();
+      c.ellipse(ep.x, ep.y, fw * 0.10, fh * 0.08, 0, 0, Math.PI * 2);
+      c.fill();
+    }
+
+    const mp = toLocal(fc.mouth, fc);
+    const mw = fw * 0.36;
+    c.strokeStyle = 'rgba(40,25,10,0.85)';
+    c.lineWidth = Math.max(2, fw * 0.014);
     c.beginPath();
-    c.ellipse(0, bandY + bandH * 0.6, bandW * 0.45, bandH * 0.9, 0, 0, Math.PI * 2);
-    c.fill();
+    c.moveTo(mp.x - mw / 2, mp.y);
+    c.lineTo(mp.x + mw / 2, mp.y);
+    c.stroke();
+    for (let i = -3; i <= 3; i++) {
+      const x = mp.x + (mw / 6) * i;
+      c.beginPath();
+      c.moveTo(x, mp.y - fh * 0.03);
+      c.lineTo(x, mp.y + fh * 0.03);
+      c.stroke();
+    }
   });
 }
 
 /* -------------------------------- Zumbi -------------------------------- */
-function drawZombie(c, fc, colors, I) {
-  withFace(c, fc, () => {
-    c.globalAlpha = I;
+function drawZombie(c, p, fc, color, I) {
+  const fw = fc.fw;
+  const fh = fc.fh;
+  const skinBase = mixHex(color, '#7acc4a', 0.65);
 
-    const skin = mixHex(colors.face, '#7acc4a', 0.65);
-    const g = c.createRadialGradient(0, 0, fc.fw * 0.1, 0, 0, fc.fw * 0.6);
-    g.addColorStop(0, skin);
-    g.addColorStop(0.7, rgba(colors.face, 0.35));
+  withFace(c, fc, () => {
+    c.globalAlpha *= I;
+
+    const g = c.createRadialGradient(0, 0, fw * 0.1, 0, 0, fw * 0.6);
+    g.addColorStop(0, skinBase);
+    g.addColorStop(0.7, rgba(color, 0.35));
     g.addColorStop(1, 'rgba(0,0,0,0)');
     c.fillStyle = g;
     c.beginPath();
-    c.ellipse(0, 0, fc.fw * 0.55, fc.fh * 0.55, 0, 0, Math.PI * 2);
+    c.ellipse(0, 0, fw * 0.55, fh * 0.55, 0, 0, Math.PI * 2);
     c.fill();
 
     for (const e of [fc.eyes.left, fc.eyes.right]) {
-      if (!e) continue;
-      const ep = toLocal(e.center, fc);
-      const r1 = Math.max(e.radius * 0.9, fc.fw * 0.035);
-      c.fillStyle = 'rgba(255,220,0,0.95)';
+      const ep = toLocal(e, fc);
+      c.fillStyle = 'rgba(255,220,0,0.9)';
       c.beginPath();
-      c.arc(ep.x, ep.y, r1, 0, Math.PI * 2);
+      c.arc(ep.x, ep.y, fw * 0.055, 0, Math.PI * 2);
       c.fill();
-      c.fillStyle = rgba(colors.eyes, 0.95);
+      c.fillStyle = 'rgba(200,0,0,0.95)';
       c.beginPath();
-      c.arc(ep.x, ep.y, r1 * 0.45, 0, Math.PI * 2);
+      c.arc(ep.x, ep.y, fw * 0.025, 0, Math.PI * 2);
       c.fill();
     }
 
-    if (fc.mouth) {
-      const mp = toLocal(fc.mouth.center, fc);
-      const mw = Math.max(fc.mouth.width, fc.fw * 0.35) * 0.9;
-      const mh = Math.max(fc.mouth.height * 1.6, fc.fh * 0.06);
-      c.strokeStyle = 'rgba(60,20,10,0.9)';
-      c.lineWidth = Math.max(2, fc.fw * 0.015);
-      c.beginPath();
-      c.moveTo(mp.x - mw, mp.y);
-      c.lineTo(mp.x + mw, mp.y);
-      c.stroke();
-      for (let i = -3; i <= 3; i++) {
-        const x = mp.x + (mw / 3) * i * 0.9;
-        c.beginPath();
-        c.moveTo(x, mp.y - mh);
-        c.lineTo(x, mp.y + mh);
-        c.stroke();
-      }
-      c.fillStyle = rgba(colors.mouth, 0.85);
-      c.beginPath();
-      c.ellipse(mp.x + mw * 0.85, mp.y + mh * 0.6, fc.fw * 0.04, fc.fh * 0.05, 0, 0, Math.PI * 2);
-      c.fill();
+    const mp = toLocal(fc.mouth, fc);
+    c.strokeStyle = 'rgba(60,20,10,0.9)';
+    c.lineWidth = Math.max(2, fw * 0.015);
+    c.beginPath();
+    c.moveTo(mp.x - fw * 0.20, mp.y);
+    c.lineTo(mp.x + fw * 0.20, mp.y);
+    c.stroke();
+    for (let i = -3; i <= 3; i++) {
+      const x = mp.x + i * fw * 0.06;
+      c.beginPath(); c.moveTo(x, mp.y - fh * 0.05); c.lineTo(x, mp.y + fh * 0.05); c.stroke();
     }
+
+    c.fillStyle = 'rgba(150,0,0,0.8)';
+    c.beginPath();
+    c.ellipse(mp.x + fw * 0.18, mp.y + fh * 0.04, fw * 0.04, fh * 0.05, 0, 0, Math.PI * 2);
+    c.fill();
   });
 }
 
-/* ------------------------------- Chifres ------------------------------- */
-/**
- * CORRIGIDOS: base assentada em fc.topY (linha das sobrancelhas), subindo
- * no eixo local do rosto. Espelhamento correto (chifre da esquerda à esquerda
- * na tela quando não espelhado; ao espelhar, tudo se inverte coerentemente).
- * Curva interna côncava, ponta para cima — nada de cabeça para baixo.
- */
-function drawHorns(c, fc, colors, I) {
-  const baseY = fc.topY + fc.fh * 0.02;
-  const hornH = fc.fh * 0.80;
-  const baseW = fc.fw * 0.15;
-  const spread = fc.fw * 0.36;
+/* --------------------------------- Gato -------------------------------- */
+function drawCat(c, p, fc, color, I) {
+  const fw = fc.fw;
+  const fh = fc.fh;
+  const inner = mixHex(color, '#ffffff', 0.55);
 
-  withFace(c, fc, () => {
-    c.globalAlpha = I * fc.symmetryAlpha;
+  withTopAnchor(c, fc, () => {
+    c.globalAlpha *= I;
 
     for (const side of [-1, 1]) {
-      const bx = side * spread;
-
-      // Corpo do chifre: base larga, curva para fora, ponta para cima
-      const grd = c.createLinearGradient(bx, baseY, bx + side * baseW * 0.4, baseY - hornH);
-      grd.addColorStop(0, mixHex(colors.face, '#3a0a10', 0.55));
-      grd.addColorStop(0.55, mixHex(colors.face, '#7a1a20', 0.35));
-      grd.addColorStop(1, mixHex(colors.face, '#2a0008', 0.7));
-
-      c.fillStyle = grd;
+      c.fillStyle = color;
       c.beginPath();
-      // base esquerda
-      c.moveTo(bx - baseW, baseY);
-      // curva externa subindo
-      c.quadraticCurveTo(
-        bx + side * baseW * 1.15, baseY - hornH * 0.55,
-        bx + side * baseW * 0.05, baseY - hornH
-      );
-      // curva interna descendo
-      c.quadraticCurveTo(
-        bx - side * baseW * 0.55, baseY - hornH * 0.55,
-        bx + baseW, baseY
-      );
+      c.moveTo(side * fw * 0.38, fh * 0.02);
+      c.lineTo(side * fw * 0.55, -fh * 0.35);
+      c.lineTo(side * fw * 0.18, -fh * 0.20);
       c.closePath();
       c.fill();
 
-      // Aresta de luz na cor dos olhos
-      c.strokeStyle = rgba(colors.eyes, 0.85);
-      c.lineWidth = Math.max(1.5, fc.fw * 0.012);
+      c.fillStyle = inner;
       c.beginPath();
-      c.moveTo(bx - baseW * 0.55, baseY - baseW * 0.15);
-      c.quadraticCurveTo(
-        bx + side * baseW * 0.9, baseY - hornH * 0.55,
-        bx + side * baseW * 0.05, baseY - hornH
-      );
-      c.stroke();
+      c.moveTo(side * fw * 0.36, fh * 0.0);
+      c.lineTo(side * fw * 0.48, -fh * 0.26);
+      c.lineTo(side * fw * 0.24, -fh * 0.16);
+      c.closePath();
+      c.fill();
+    }
+  });
 
-      // Anéis de textura (sobem proporcionalmente)
-      c.strokeStyle = 'rgba(0,0,0,0.35)';
-      c.lineWidth = Math.max(1, fc.fw * 0.006);
-      for (let k = 1; k <= 4; k++) {
-        const gy = baseY - hornH * (k / 5);
-        const gw = baseW * (1 - k / 5) * 0.85;
+  withFace(c, fc, () => {
+    c.globalAlpha *= I;
+
+    const mp = toLocal(fc.mouth, fc);
+    c.strokeStyle = 'rgba(255,255,255,0.9)';
+    c.lineWidth = Math.max(1.5, fw * 0.012);
+    for (const side of [-1, 1]) {
+      for (let k = 0; k < 3; k++) {
         c.beginPath();
-        c.moveTo(bx - gw, gy);
-        c.quadraticCurveTo(bx, gy - gw * 0.4, bx + gw, gy);
+        c.moveTo(mp.x + side * fw * 0.15, mp.y - fh * 0.02 + k * fh * 0.03);
+        c.lineTo(mp.x + side * fw * 0.55, mp.y - fh * 0.05 + k * fh * 0.06);
         c.stroke();
       }
     }
+
+    c.fillStyle = mixHex(color, '#ff7aa0', 0.6);
+    c.beginPath();
+    c.moveTo(mp.x - fw * 0.03, mp.y - fh * 0.06);
+    c.lineTo(mp.x + fw * 0.03, mp.y - fh * 0.06);
+    c.lineTo(mp.x, mp.y - fh * 0.02);
+    c.closePath();
+    c.fill();
   });
 }
 
 /* ------------------------------- Palhaço ------------------------------- */
-function drawClown(c, fc, colors, I) {
+function drawClown(c, p, fc, color, I) {
+  const fw = fc.fw;
+  const fh = fc.fh;
+
   withFace(c, fc, () => {
-    c.globalAlpha = I;
+    c.globalAlpha *= I;
 
-    if (fc.nose) {
-      const np = toLocal(fc.nose.center, fc);
-      const rr = Math.max(fc.fw * 0.09, (fc.eyes.left?.radius || fc.fw * 0.06) * 1.2);
-      c.fillStyle = rgba(colors.face, 1);
-      c.beginPath();
-      c.arc(np.x, np.y, rr, 0, Math.PI * 2);
-      c.fill();
-      c.fillStyle = 'rgba(255,255,255,0.6)';
-      c.beginPath();
-      c.arc(np.x - rr * 0.35, np.y - rr * 0.35, rr * 0.35, 0, Math.PI * 2);
-      c.fill();
-    }
+    const np = toLocal(fc.nose, fc);
+    c.fillStyle = '#e60023';
+    c.beginPath();
+    c.arc(np.x, np.y, fw * 0.09, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = 'rgba(255,255,255,0.6)';
+    c.beginPath();
+    c.arc(np.x - fw * 0.03, np.y - fh * 0.03, fw * 0.03, 0, Math.PI * 2);
+    c.fill();
 
-    c.fillStyle = rgba(colors.face, 0.8);
+    c.fillStyle = rgba(color, 0.85);
     for (const side of [-1, 1]) {
+      const bx = side * fw * 0.32;
+      const by = fh * 0.12;
       c.beginPath();
-      c.arc(side * fc.fw * 0.32, fc.fh * 0.12, fc.fw * 0.10, 0, Math.PI * 2);
+      c.arc(bx, by, fw * 0.10, 0, Math.PI * 2);
       c.fill();
     }
 
-    if (fc.mouth) {
-      const mp = toLocal(fc.mouth.center, fc);
-      const sw = Math.max(fc.mouth.width * 1.2, fc.fw * 0.6);
-      c.strokeStyle = rgba(colors.mouth, 0.95);
-      c.lineWidth = Math.max(3, fc.fw * 0.03);
-      c.beginPath();
-      c.moveTo(mp.x - sw / 2, mp.y - fc.fh * 0.02);
-      c.quadraticCurveTo(mp.x, mp.y + fc.fh * 0.20, mp.x + sw / 2, mp.y - fc.fh * 0.02);
-      c.stroke();
-    }
+    const mp = toLocal(fc.mouth, fc);
+    c.strokeStyle = '#c20020';
+    c.lineWidth = Math.max(3, fw * 0.03);
+    c.beginPath();
+    c.moveTo(mp.x - fw * 0.30, mp.y - fh * 0.02);
+    c.quadraticCurveTo(mp.x, mp.y + fh * 0.20, mp.x + fw * 0.30, mp.y - fh * 0.02);
+    c.stroke();
 
+    c.fillStyle = '#1a1a1a';
     for (const e of [fc.eyes.left, fc.eyes.right]) {
-      if (!e) continue;
-      const ep = toLocal(e.center, fc);
-      c.fillStyle = 'rgba(20,20,20,0.9)';
+      const ep = toLocal(e, fc);
       c.beginPath();
-      c.ellipse(ep.x, ep.y - fc.fh * 0.04, e.radius * 1.1, e.radius * 0.6, 0, 0, Math.PI * 2);
+      c.ellipse(ep.x, ep.y - fh * 0.05, fw * 0.08, fh * 0.05, 0, 0, Math.PI * 2);
       c.fill();
     }
   });
 }
 
 /* ------------------------------ Fantasma ------------------------------- */
-function drawGhost(c, fc, colors, I) {
+function drawGhost(c, p, fc, color, I) {
+  const fw = fc.fw;
+  const fh = fc.fh;
+
   withFace(c, fc, () => {
     c.globalAlpha = 0.35 * I;
-    c.fillStyle = mixHex(colors.face, '#e8f0ff', 0.7);
+    c.fillStyle = '#e8f0ff';
     c.beginPath();
-    c.ellipse(0, -fc.fh * 0.05, fc.fw * 0.55, fc.fh * 0.60, 0, 0, Math.PI * 2);
+    c.ellipse(0, -fh * 0.05, fw * 0.55, fh * 0.60, 0, 0, Math.PI * 2);
     c.fill();
 
     c.globalAlpha = 0.9 * I;
     c.fillStyle = 'rgba(20,20,40,0.9)';
     for (const e of [fc.eyes.left, fc.eyes.right]) {
-      if (!e) continue;
-      const ep = toLocal(e.center, fc);
+      const ep = toLocal(e, fc);
       c.beginPath();
-      c.ellipse(ep.x, ep.y, e.radius * 1.2, e.radius * 0.9, 0, 0, Math.PI * 2);
+      c.ellipse(ep.x, ep.y, fw * 0.09, fh * 0.07, 0, 0, Math.PI * 2);
       c.fill();
     }
 
-    const g = c.createRadialGradient(0, 0, fc.fw * 0.2, 0, 0, fc.fw * 0.7);
-    g.addColorStop(0, rgba(colors.face, 0.25));
+    const g = c.createRadialGradient(0, 0, fw * 0.2, 0, 0, fw * 0.7);
+    g.addColorStop(0, rgba(color, 0.25));
     g.addColorStop(1, 'rgba(255,255,255,0)');
     c.fillStyle = g;
     c.beginPath();
-    c.ellipse(0, 0, fc.fw * 0.7, fc.fh * 0.7, 0, 0, Math.PI * 2);
+    c.ellipse(0, 0, fw * 0.7, fh * 0.7, 0, 0, Math.PI * 2);
     c.fill();
   });
 }
 
-/* -------------------------------- Diabo -------------------------------- */
-/**
- * CORRIGIDO: chifres assentados na testa (fc.topY), subindo no eixo local,
- * seguindo o mesmo princípio dos "horns" — antes ficava de cabeça para baixo
- * em certas poses.
- */
-function drawDevil(c, fc, colors, I) {
-  const baseY = fc.topY + fc.fh * 0.02;
-  const hornH = fc.fh * 0.55;
-  const baseW = fc.fw * 0.10;
-  const spread = fc.fw * 0.26;
+/* -------------------------------- Duende ------------------------------- */
+function drawGoblin(c, p, fc, color, I) {
+  const fw = fc.fw;
+  const fh = fc.fh;
+  const earColor = mixHex(color, '#7ac74a', 0.65);
+  const earInner = mixHex(color, '#c8e0a8', 0.55);
 
-  withFace(c, fc, () => {
-    c.globalAlpha = I * fc.symmetryAlpha;
+  withTopAnchor(c, fc, () => {
+    c.globalAlpha *= I;
 
-    // Chifres vermelhos curvados para dentro (estilo diabo clássico)
     for (const side of [-1, 1]) {
-      const bx = side * spread;
-      c.fillStyle = rgba(colors.face, 1);
-      c.strokeStyle = 'rgba(60,0,0,0.7)';
-      c.lineWidth = Math.max(1.5, fc.fw * 0.012);
-
+      c.fillStyle = earColor;
       c.beginPath();
-      c.moveTo(bx - baseW, baseY);
+      c.moveTo(side * fw * 0.30, fh * 0.05);
       c.quadraticCurveTo(
-        bx + side * baseW * 2.2, baseY - hornH * 0.55,
-        bx + side * baseW * 1.5, baseY - hornH
+        side * fw * 0.85, -fh * 0.02,
+        side * fw * 0.78, -fh * 0.35
       );
       c.quadraticCurveTo(
-        bx + side * baseW * 0.2, baseY - hornH * 0.55,
-        bx + baseW, baseY
+        side * fw * 0.48, -fh * 0.10,
+        side * fw * 0.22, -fh * 0.02
       );
       c.closePath();
       c.fill();
+
+      c.fillStyle = earInner;
+      c.beginPath();
+      c.moveTo(side * fw * 0.32, fh * 0.02);
+      c.quadraticCurveTo(
+        side * fw * 0.70, -fh * 0.05,
+        side * fw * 0.66, -fh * 0.28
+      );
+      c.quadraticCurveTo(
+        side * fw * 0.44, -fh * 0.08,
+        side * fw * 0.26, -fh * 0.02
+      );
+      c.closePath();
+      c.fill();
+
+      c.strokeStyle = 'rgba(20,60,10,0.45)';
+      c.lineWidth = Math.max(1.2, fw * 0.008);
+      c.beginPath();
+      c.moveTo(side * fw * 0.34, fh * 0.02);
+      c.quadraticCurveTo(side * fw * 0.55, -fh * 0.10, side * fw * 0.62, -fh * 0.28);
+      c.stroke();
+    }
+  });
+
+  withFace(c, fc, () => {
+    c.globalAlpha *= I;
+
+    c.strokeStyle = 'rgba(30,60,15,0.85)';
+    c.lineWidth = Math.max(3, fw * 0.025);
+    c.lineCap = 'round';
+    for (const e of [fc.eyes.left, fc.eyes.right]) {
+      const ep = toLocal(e, fc);
+      c.beginPath();
+      c.moveTo(ep.x - fw * 0.10, ep.y - fh * 0.08);
+      c.quadraticCurveTo(ep.x, ep.y - fh * 0.10, ep.x + fw * 0.10, ep.y - fh * 0.06);
       c.stroke();
     }
 
-    // Olhos brilhantes
-    for (const e of [fc.eyes.left, fc.eyes.right]) {
-      if (!e) continue;
-      const ep = toLocal(e.center, fc);
-      const rr = Math.max(e.radius * 1.4, fc.fw * 0.06);
-      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, rr);
-      g.addColorStop(0, rgba(colors.eyes, 1));
-      g.addColorStop(1, rgba(colors.eyes, 0.1));
-      c.fillStyle = g;
+    const np = toLocal(fc.nose, fc);
+    c.fillStyle = earColor;
+    c.beginPath();
+    c.ellipse(np.x, np.y + fh * 0.02, fw * 0.06, fh * 0.07, 0, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = 'rgba(20,50,10,0.6)';
+    for (const side of [-1, 1]) {
       c.beginPath();
-      c.arc(ep.x, ep.y, rr, 0, Math.PI * 2);
+      c.ellipse(np.x + side * fw * 0.02, np.y + fh * 0.05, fw * 0.008, fh * 0.012, 0, 0, Math.PI * 2);
       c.fill();
     }
+
+    const mp = toLocal(fc.mouth, fc);
+    c.strokeStyle = 'rgba(30,20,10,0.85)';
+    c.lineWidth = Math.max(2, fw * 0.014);
+    c.beginPath();
+    c.moveTo(mp.x - fw * 0.20, mp.y);
+    c.quadraticCurveTo(mp.x, mp.y + fh * 0.08, mp.x + fw * 0.20, mp.y);
+    c.stroke();
   });
 }
 
 /* ------------------------------ Esqueleto ------------------------------ */
-function drawSkeleton(c, fc, colors, I) {
+function drawSkeleton(c, p, fc, color, I) {
+  const fw = fc.fw;
+  const fh = fc.fh;
+
   withFace(c, fc, () => {
     c.globalAlpha = 0.55 * I;
-    c.fillStyle = mixHex(colors.face, '#f0ead8', 0.85);
+    c.fillStyle = mixHex(color, '#f0ead8', 0.85);
     c.beginPath();
-    c.ellipse(0, 0, fc.fw * 0.55, fc.fh * 0.55, 0, 0, Math.PI * 2);
+    c.ellipse(0, 0, fw * 0.55, fh * 0.55, 0, 0, Math.PI * 2);
     c.fill();
 
     c.globalAlpha = I;
     c.fillStyle = '#0a0a0a';
     for (const e of [fc.eyes.left, fc.eyes.right]) {
-      if (!e) continue;
-      const ep = toLocal(e.center, fc);
+      const ep = toLocal(e, fc);
       c.beginPath();
-      c.ellipse(ep.x, ep.y, e.radius * 1.25, e.radius * 0.95, 0, 0, Math.PI * 2);
+      c.ellipse(ep.x, ep.y, fw * 0.12, fh * 0.09, 0, 0, Math.PI * 2);
       c.fill();
     }
 
-    if (fc.nose) {
-      const np = toLocal(fc.nose.center, fc);
-      c.beginPath();
-      c.moveTo(np.x, np.y - fc.fh * 0.05);
-      c.lineTo(np.x - fc.fw * 0.05, np.y + fc.fh * 0.06);
-      c.lineTo(np.x + fc.fw * 0.05, np.y + fc.fh * 0.06);
-      c.closePath();
-      c.fill();
-    }
+    const np = toLocal(fc.nose, fc);
+    c.beginPath();
+    c.moveTo(np.x, np.y - fh * 0.05);
+    c.lineTo(np.x - fw * 0.05, np.y + fh * 0.06);
+    c.lineTo(np.x + fw * 0.05, np.y + fh * 0.06);
+    c.closePath();
+    c.fill();
 
-    if (fc.mouth) {
-      const mp = toLocal(fc.mouth.center, fc);
-      const tw = Math.max(fc.fw * 0.45, fc.mouth.width * 1.2);
-      const th = Math.max(fc.fh * 0.15, fc.mouth.height * 1.4);
-      c.fillStyle = mixHex(colors.face, '#f0ead8', 0.85);
-      c.strokeStyle = '#222';
-      c.lineWidth = Math.max(2, fc.fw * 0.02);
-      c.fillRect(mp.x - tw / 2, mp.y - th / 2, tw, th);
-      c.strokeRect(mp.x - tw / 2, mp.y - th / 2, tw, th);
-      for (let i = 1; i < 6; i++) {
-        const x = mp.x - tw / 2 + (tw / 6) * i;
-        c.beginPath(); c.moveTo(x, mp.y - th / 2); c.lineTo(x, mp.y + th / 2); c.stroke();
-      }
+    const mp = toLocal(fc.mouth, fc);
+    c.fillStyle = mixHex(color, '#f0ead8', 0.85);
+    c.strokeStyle = '#222';
+    c.lineWidth = Math.max(2, fw * 0.02);
+    const tw = fw * 0.45;
+    const th = fh * 0.15;
+    c.fillRect(mp.x - tw / 2, mp.y - th / 2, tw, th);
+    c.strokeRect(mp.x - tw / 2, mp.y - th / 2, tw, th);
+    for (let i = 1; i < 6; i++) {
+      const x = mp.x - tw / 2 + (tw / 6) * i;
+      c.beginPath(); c.moveTo(x, mp.y - th / 2); c.lineTo(x, mp.y + th / 2); c.stroke();
     }
   });
 }
 
-/* -------------------------------- Múmia -------------------------------- */
-/**
- * Faixas brancas cruzando o rosto (baseado na geometria do esqueleto/caveira).
- * Desenha faixas horizontais e diagonais com sombreamento, usando as medidas
- * estáveis fw/fh — funciona bem em qualquer inclinação.
- */
-function drawMummy(c, fc, colors, I) {
+/* -------------------------------- Alien -------------------------------- */
+function drawAlien(c, p, fc, color, I) {
+  const fw = fc.fw;
+  const fh = fc.fh;
+
   withFace(c, fc, () => {
-    c.globalAlpha = I * 0.92;
+    c.globalAlpha *= I;
 
-    const bandColor = mixHex(colors.face, '#efe6cf', 0.88);
-    const bandShadow = mixHex(colors.face, '#6b5d3e', 0.6);
-    const rx = fc.fw * 0.58;
-    const ry = fc.fh * 0.60;
+    const skinColor = mixHex(color, '#8fd67a', 0.55);
+    const skinDark  = mixHex(color, '#3a5a30', 0.55);
+    const skinLight = mixHex(color, '#d4f0c0', 0.55);
 
-    // Base clara (rosto enfaixado)
-    c.fillStyle = bandColor;
+    const headGrd = c.createRadialGradient(
+      -fw * 0.15, -fh * 0.20, fw * 0.10,
+      0, 0, fw * 0.65
+    );
+    headGrd.addColorStop(0, skinLight);
+    headGrd.addColorStop(0.55, skinColor);
+    headGrd.addColorStop(1, skinDark);
+
+    c.fillStyle = headGrd;
     c.beginPath();
-    c.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    c.ellipse(0, -fh * 0.05, fw * 0.62, fh * 0.68, 0, 0, Math.PI * 2);
     c.fill();
 
-    // Faixas horizontais cruzadas com leve inclinação alternada
-    const bands = 7;
-    for (let i = 0; i < bands; i++) {
-      const t = i / (bands - 1);
-      const y = -ry * 0.85 + ry * 1.7 * t;
-      const tilt = (i % 2 === 0 ? 1 : -1) * fc.fh * 0.06;
-      const width = rx * 2.05;
-
-      c.fillStyle = i % 2 === 0 ? bandColor : mixHex(colors.face, '#d9cba6', 0.75);
-      c.beginPath();
-      c.moveTo(-width / 2, y - fc.fh * 0.035);
-      c.lineTo(width / 2, y - fc.fh * 0.035 + tilt);
-      c.lineTo(width / 2, y + fc.fh * 0.035 + tilt);
-      c.lineTo(-width / 2, y + fc.fh * 0.035);
-      c.closePath();
-      c.fill();
-
-      // Sombra inferior de cada faixa
-      c.strokeStyle = bandShadow;
-      c.lineWidth = Math.max(1, fc.fw * 0.008);
-      c.beginPath();
-      c.moveTo(-width / 2, y + fc.fh * 0.04);
-      c.lineTo(width / 2, y + fc.fh * 0.04 + tilt);
-      c.stroke();
-    }
-
-    // Recorte: olhos escuros por cima das faixas
     for (const e of [fc.eyes.left, fc.eyes.right]) {
-      if (!e) continue;
-      const ep = toLocal(e.center, fc);
-      c.fillStyle = 'rgba(0,0,0,0.9)';
+      const ep = toLocal(e, fc);
+      c.save();
+      c.translate(ep.x, ep.y);
+      c.rotate(ep.x < 0 ? -0.35 : 0.35);
+      c.fillStyle = '#0a0a10';
       c.beginPath();
-      c.ellipse(ep.x, ep.y, e.radius * 1.3, e.radius * 1.0, 0, 0, Math.PI * 2);
+      c.ellipse(0, 0, fw * 0.17, fh * 0.10, 0, 0, Math.PI * 2);
       c.fill();
-      // Brilho na cor dos olhos
-      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, e.radius * 1.3);
-      g.addColorStop(0, rgba(colors.eyes, 0.7));
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      c.fillStyle = g;
+      c.fillStyle = 'rgba(255,255,255,0.55)';
       c.beginPath();
-      c.ellipse(ep.x, ep.y, e.radius * 1.3, e.radius * 1.0, 0, 0, Math.PI * 2);
+      c.ellipse(-fw * 0.05, -fh * 0.03, fw * 0.035, fh * 0.022, 0, 0, Math.PI * 2);
+      c.fill();
+      c.restore();
+    }
+
+    const np = toLocal(fc.nose, fc);
+    c.fillStyle = 'rgba(20,40,15,0.85)';
+    for (const side of [-1, 1]) {
+      c.beginPath();
+      c.ellipse(np.x + side * fw * 0.025, np.y + fh * 0.02, fw * 0.008, fh * 0.018, 0, 0, Math.PI * 2);
       c.fill();
     }
 
-    // Boca costurada (na cor da boca)
-    if (fc.mouth) {
-      const mp = toLocal(fc.mouth.center, fc);
-      const mw = Math.max(fc.mouth.width, fc.fw * 0.35);
-      c.strokeStyle = rgba(colors.mouth, 0.9);
-      c.lineWidth = Math.max(2, fc.fw * 0.014);
-      c.beginPath();
-      c.moveTo(mp.x - mw / 2, mp.y);
-      c.lineTo(mp.x + mw / 2, mp.y);
-      c.stroke();
-      for (let i = -3; i <= 3; i++) {
-        const x = mp.x + (mw / 6) * i;
-        c.beginPath();
-        c.moveTo(x, mp.y - fc.fh * 0.03);
-        c.lineTo(x, mp.y + fc.fh * 0.03);
-        c.stroke();
-      }
-    }
-  });
-}
-
-/* -------------------------------- Pirata ------------------------------- */
-/**
- * Bandana + tapa-olho + cicatriz (mesma lógica de ancoramento estável).
- */
-function drawPirate(c, fc, colors, I) {
-  const bandY = fc.topY + fc.fh * 0.05;
-  const bandH = fc.fh * 0.12;
-  const bandW = fc.fw * 1.10;
-
-  withFace(c, fc, () => {
-    c.globalAlpha = I * fc.symmetryAlpha;
-
-    // Bandana vermelha (base baseada na linha das sobrancelhas)
-    const band = c.createLinearGradient(0, bandY - bandH, 0, bandY + bandH);
-    band.addColorStop(0, mixHex(colors.face, '#e0002a', 0.6));
-    band.addColorStop(0.6, mixHex(colors.face, '#a50020', 0.55));
-    band.addColorStop(1, mixHex(colors.face, '#5a0010', 0.6));
-    c.fillStyle = band;
+    const mp = toLocal(fc.mouth, fc);
+    c.strokeStyle = 'rgba(20,40,15,0.9)';
+    c.lineWidth = Math.max(1.5, fw * 0.012);
     c.beginPath();
-    c.moveTo(-bandW / 2, bandY);
-    c.quadraticCurveTo(0, bandY - bandH * 0.6, bandW / 2, bandY);
-    c.lineTo(bandW / 2, bandY + bandH);
-    c.quadraticCurveTo(0, bandY + bandH * 1.4, -bandW / 2, bandY + bandH);
-    c.closePath();
-    c.fill();
+    c.moveTo(mp.x - fw * 0.08, mp.y);
+    c.lineTo(mp.x + fw * 0.08, mp.y);
+    c.stroke();
 
-    // Nó no lado direito da bandana
-    c.fillStyle = mixHex(colors.face, '#a50020', 0.55);
+    c.strokeStyle = 'rgba(40,80,30,0.45)';
+    c.lineWidth = Math.max(1.5, fw * 0.010);
     c.beginPath();
-    c.ellipse(bandW * 0.45, bandY + bandH * 0.6, bandH * 0.5, bandH * 0.4, -0.4, 0, Math.PI * 2);
-    c.fill();
-    // Ponta do nó
-    c.beginPath();
-    c.moveTo(bandW * 0.45, bandY + bandH * 0.6);
-    c.lineTo(bandW * 0.55, bandY + bandH * 1.5);
-    c.lineTo(bandW * 0.40, bandY + bandH * 1.4);
-    c.closePath();
-    c.fill();
-
-    // Tapa-olho (sobre o olho esquerdo — lado esquerdo da tela = lado do usuário)
-    if (fc.eyes.left) {
-      const ep = toLocal(fc.eyes.left.center, fc);
-      const rr = Math.max(fc.eyes.left.radius * 2.0, fc.fw * 0.11);
-      c.fillStyle = 'rgba(20,10,10,0.95)';
-      c.beginPath();
-      c.ellipse(ep.x, ep.y, rr, rr * 0.75, -0.15, 0, Math.PI * 2);
-      c.fill();
-      // Cordão cruzando o rosto
-      c.strokeStyle = 'rgba(20,10,10,0.9)';
-      c.lineWidth = Math.max(1.5, fc.fw * 0.012);
-      c.beginPath();
-      c.moveTo(ep.x - rr, ep.y - rr * 0.3);
-      c.lineTo(-fc.fw * 0.55, -fc.fh * 0.30);
-      c.stroke();
-      c.beginPath();
-      c.moveTo(ep.x + rr, ep.y + rr * 0.2);
-      c.lineTo(fc.fw * 0.55, fc.fh * 0.15);
-      c.stroke();
-    }
-
-    // Cicatriz no outro lado (direito)
-    if (fc.eyes.right) {
-      const ep = toLocal(fc.eyes.right.center, fc);
-      c.strokeStyle = 'rgba(180,30,30,0.85)';
-      c.lineWidth = Math.max(2, fc.fw * 0.014);
-      c.beginPath();
-      c.moveTo(ep.x - fc.fw * 0.04, ep.y - fc.fh * 0.20);
-      c.lineTo(ep.x + fc.fw * 0.04, ep.y + fc.fh * 0.22);
-      c.stroke();
-      // Traços transversais (pontos de sutura)
-      for (let k = -2; k <= 2; k++) {
-        const cx = ep.x;
-        const cy = ep.y + k * fc.fh * 0.06;
-        c.beginPath();
-        c.moveTo(cx - fc.fw * 0.02, cy);
-        c.lineTo(cx + fc.fw * 0.02, cy);
-        c.stroke();
-      }
-    }
+    c.ellipse(0, -fh * 0.05, fw * 0.62, fh * 0.68, 0, 0, Math.PI * 2);
+    c.stroke();
   });
 }
 
 /* ------------------------------ Olhos Glow ----------------------------- */
-function drawGlow(c, fc, colors, I) {
+function drawGlow(c, p, fc, color, I) {
+  const fw = fc.fw;
+
   withFace(c, fc, () => {
     c.globalAlpha = I;
     for (const e of [fc.eyes.left, fc.eyes.right]) {
-      if (!e) continue;
-      const ep = toLocal(e.center, fc);
-      const rr = e.radius * 2.2;
-      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, rr);
-      g.addColorStop(0, rgba(colors.eyes, 1));
-      g.addColorStop(0.5, rgba(colors.eyes, 0.5));
-      g.addColorStop(1, rgba(colors.eyes, 0));
+      const ep = toLocal(e, fc);
+      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, fw * 0.20);
+      g.addColorStop(0, rgba(color, 1));
+      g.addColorStop(0.5, rgba(color, 0.5));
+      g.addColorStop(1, rgba(color, 0));
       c.fillStyle = g;
       c.beginPath();
-      c.arc(ep.x, ep.y, rr, 0, Math.PI * 2);
+      c.arc(ep.x, ep.y, fw * 0.20, 0, Math.PI * 2);
       c.fill();
     }
-  });
-}
-
-/* -------------------------------- Aura --------------------------------- */
-function drawAura(c, fc, colors, I) {
-  const t = performance.now() / 1000;
-  const pulse = 0.85 + 0.15 * Math.sin(t * 2);
-  const rx = fc.fw * 0.82;
-  const ry = fc.fh * 0.78;
-
-  withFace(c, fc, () => {
-    c.globalAlpha = I;
-    c.globalCompositeOperation = 'lighter';
-
-    const halo = c.createRadialGradient(0, 0, rx * 0.35, 0, 0, rx);
-    halo.addColorStop(0, rgba(colors.face, 0));
-    halo.addColorStop(0.55, rgba(colors.face, 0.35 * pulse));
-    halo.addColorStop(0.85, rgba(colors.face, 0.12 * pulse));
-    halo.addColorStop(1, rgba(colors.face, 0));
-    c.fillStyle = halo;
-    c.beginPath();
-    c.ellipse(0, 0, rx * 1.35, ry * 1.35, 0, 0, Math.PI * 2);
-    c.fill();
-
-    c.strokeStyle = rgba(colors.face, 0.75 * pulse);
-    c.lineWidth = Math.max(2, fc.fw * 0.02);
-    c.beginPath();
-    c.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
-    c.stroke();
-
-    c.strokeStyle = rgba(colors.face, 0.35 * pulse);
-    c.lineWidth = Math.max(4, fc.fw * 0.05);
-    c.beginPath();
-    c.ellipse(0, 0, rx * 1.06, ry * 1.06, 0, 0, Math.PI * 2);
-    c.stroke();
-
-    const orbitR = fc.fw * 0.62;
-    const orbitRy = fc.fh * 0.60;
-    const baseHue = (t * 40 + (hexToRgb(colors.eyes).r * 0.6)) % 360;
-    const segments = 5;
-
-    for (let i = 0; i < segments; i++) {
-      const hue = (baseHue + i * 60) % 360;
-      const start = (t * 1.2 + i * (Math.PI * 2 / segments)) % (Math.PI * 2);
-      const end = start + Math.PI * 2 / segments - 0.08;
-      c.strokeStyle = `hsla(${hue}, 100%, 60%, ${0.75 * pulse})`;
-      c.lineWidth = Math.max(2, fc.fw * 0.014);
-      c.beginPath();
-      c.ellipse(0, 0, orbitR, orbitRy, 0, start, end);
-      c.stroke();
-
-      c.strokeStyle = `hsla(${hue}, 100%, 90%, ${0.85 * pulse})`;
-      c.lineWidth = Math.max(0.8, fc.fw * 0.005);
-      c.beginPath();
-      c.ellipse(0, 0, orbitR, orbitRy, 0, start, end);
-      c.stroke();
-    }
-
-    for (let i = 0; i < 3; i++) {
-      const a = t * 1.5 + i * (Math.PI * 2 / 3);
-      const bx = Math.cos(a) * orbitR;
-      const by = Math.sin(a) * orbitRy;
-      const br = Math.max(2, fc.fw * 0.012);
-      const g = c.createRadialGradient(bx, by, 0, bx, by, br * 3);
-      g.addColorStop(0, rgba(colors.eyes, 0.9 * pulse));
-      g.addColorStop(1, rgba(colors.eyes, 0));
-      c.fillStyle = g;
-      c.beginPath();
-      c.arc(bx, by, br * 3, 0, Math.PI * 2);
-      c.fill();
-    }
-
-    c.globalCompositeOperation = 'source-over';
   });
 }
 
@@ -1993,6 +1710,7 @@ $btnCapture.addEventListener('click', async () => {
   if (state.capturing) return;
   state.capturing = true;
   $btnCapture.disabled = true;
+
   try {
     if (state.timer > 0) await runCountdown(state.timer);
     await doCapture();
@@ -2031,11 +1749,15 @@ function computeOutputSize(srcW, srcH) {
   const longSide = Math.max(srcW, srcH);
   const shortSide = Math.min(srcW, srcH);
   let scale = 1;
-  if (longSide > CAPTURE_MAX_SIDE) scale = CAPTURE_MAX_SIDE / longSide;
+
+  if (longSide > CAPTURE_MAX_SIDE) {
+    scale = CAPTURE_MAX_SIDE / longSide;
+  }
   if (shortSide * scale < MIN_CAPTURE_SHORT_SIDE) {
     const up = MIN_CAPTURE_SHORT_SIDE / shortSide;
     scale = Math.min(Math.max(scale, up), CAPTURE_MAX_SIDE / longSide || up);
   }
+
   return {
     width: Math.max(1, Math.round(srcW * scale)),
     height: Math.max(1, Math.round(srcH * scale))
@@ -2060,7 +1782,10 @@ async function snapshotFrame() {
 
 async function doCapture() {
   const snap = await snapshotFrame();
-  if (!snap) { toast('Sem imagem para capturar', true); return; }
+  if (!snap) {
+    toast('Sem imagem para capturar', true);
+    return;
+  }
 
   const { width: outW, height: outH } = computeOutputSize(snap.srcW, snap.srcH);
 
@@ -2074,8 +1799,12 @@ async function doCapture() {
   octx.fillRect(0, 0, outW, outH);
 
   const fit = fitCover(snap.srcW, snap.srcH, outW, outH);
+
   octx.save();
-  if (state.mirror) { octx.translate(outW, 0); octx.scale(-1, 1); }
+  if (state.mirror) {
+    octx.translate(outW, 0);
+    octx.scale(-1, 1);
+  }
   try {
     octx.drawImage(snap.source, fit.dx, fit.dy, fit.dw, fit.dh);
   } catch (err) {
@@ -2085,10 +1814,10 @@ async function doCapture() {
     return;
   }
   octx.restore();
+
   if (snap.bitmap) snap.source.close?.();
 
   if (state.faces.length > 0) {
-    resetSmoothing();
     for (const face of state.faces) {
       const pts = landmarksToStage(face, snap.srcW, snap.srcH, outW, outH, state.mirror);
       drawFilter(octx, pts, outW, outH, state);
@@ -2111,6 +1840,7 @@ function showResult(dataUrl) {
   $resultModal.classList.add('open');
   document.getElementById('btn-download').focus({ preventScroll: true });
 }
+
 function closeResult() {
   $resultModal.classList.remove('open');
   $resultImg.removeAttribute('src');
@@ -2129,8 +1859,10 @@ document.getElementById('btn-download').addEventListener('click', () => {
   a.remove();
   toast('Download iniciado');
 });
+
 document.getElementById('btn-again').addEventListener('click', closeResult);
 document.getElementById('btn-close-result').addEventListener('click', closeResult);
+
 $resultModal.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeResult();
 });
