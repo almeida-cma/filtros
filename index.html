@@ -487,13 +487,13 @@
 
 <script type="module">
 /* =========================================================================
-   Filtros de Fantasia — Halloween
-   Pipeline:
-   - MediaPipe Face Landmarker (CDN, GPU com fallback CPU)
-   - Filtros em canvas 2D seguindo landmarks do rosto
-   - Geometria centralizada + ângulo estabilizado + rejeição de perfil
-   - Neon multi-anel com pulsação (composição 'lighter', sem shadowBlur)
-   - Cores independentes: rosto, olhos, boca
+   Filtros de Fantasia — Halloween (v2)
+   Correções principais:
+   - Chifres, coroa e diabo agora ancorados na testa (topo estável do rosto)
+   - Sistema de coordenadas unificado via "face frame" (cx, cy, fw, fh, ang)
+   - Ângulo do rosto limitado a ±35° para evitar filtros "torcidos"
+   - Detecção de perfil reduz opacidade de filtros simétricos
+   - Novos filtros: Múmia, Pirata (baseados no que funcionou bem)
    ========================================================================= */
 
 import { FaceLandmarker, FilesetResolver }
@@ -510,6 +510,8 @@ const TOAST_DURATION_MS = 2400;
 const TOAST_ERROR_DURATION_MS = 4800;
 const ANGLE_SMOOTHING = 0.25;
 const FACE_COLLAPSE_RATIO = 0.35;
+const MAX_ANGLE = (35 * Math.PI) / 180;
+const PROFILE_RATIO = 0.55; // fw/fh abaixo disso = perfil aproximado
 
 /* ------------------------------- DOM ----------------------------------- */
 const $video        = document.getElementById('video');
@@ -563,13 +565,7 @@ const state = {
   capturing: false,
   staticImage: null,
   dpr: window.devicePixelRatio || 1,
-  // suavização temporal por slot de rosto
-  smoothing: {
-    angle: null,
-    width: null,
-    cx: null,
-    cy: null
-  }
+  smoothing: { angle: null, width: null, cx: null, cy: null }
 };
 
 /* ------------------------------ Utilidades ----------------------------- */
@@ -603,7 +599,6 @@ function mixHex(hex, target, t) {
   return `rgb(${Math.round(a.r + (b.r - a.r) * k)},${Math.round(a.g + (b.g - a.g) * k)},${Math.round(a.b + (b.b - a.b) * k)})`;
 }
 function dist(p1, p2) { return Math.hypot(p1.x - p2.x, p1.y - p2.y); }
-function lerp(a, b, t) { return a + (b - a) * t; }
 function smooth(prev, next, alpha) {
   if (prev === null || !Number.isFinite(prev)) return next;
   return prev + (next - prev) * alpha;
@@ -615,6 +610,7 @@ function angleLerp(prev, next, alpha) {
   while (d < -Math.PI) d += Math.PI * 2;
   return prev + d * alpha;
 }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 /* ------------------------- Geometria centralizada ---------------------- */
 function fitCover(srcW, srcH, dstW, dstH) {
@@ -639,6 +635,7 @@ function landmarksToStage(landmarks, srcW, srcH, dstW, dstH, mirror) {
   return out;
 }
 
+/** Converte coordenada global para o "referencial do rosto" (centro + ângulo). */
 function toLocal(pt, fc) {
   const dx = pt.x - fc.cx;
   const dy = pt.y - fc.cy;
@@ -647,10 +644,38 @@ function toLocal(pt, fc) {
   return { x: dx * c - dy * s, y: dx * s + dy * c };
 }
 
+/** Aplica transformação (translate+rotate) para desenhar no referencial do rosto. */
+function withFace(c, fc, fn) {
+  c.save();
+  c.translate(fc.cx, fc.cy);
+  c.rotate(fc.ang);
+  try { fn(); } finally { c.restore(); }
+}
+
 /**
- * Ângulo estável: média de três pares (33→263, 133→362, 70→300) ponderada
- * por comprimento. Pares muito curtos (perfil/perda) têm peso quase nulo.
+ * Calcula a linha dos olhos e a "linha das sobrancelhas" — mais estáveis que
+ * o topo da testa (p[10]) em perfis. Retorna coordenadas no referencial do rosto.
  */
+function stableFaceAxis(p, fc) {
+  const leftBrow  = p[70];   // sobrancelha esquerda
+  const rightBrow = p[300];  // sobrancelha direita
+  const leftEye   = p[33];
+  const rightEye  = p[263];
+
+  // Centro das sobrancelhas (em coords globais), convertido ao referencial do rosto
+  const browCenter = (leftBrow && rightBrow)
+    ? toLocal({ x: (leftBrow.x + rightBrow.x) / 2, y: (leftBrow.y + rightBrow.y) / 2 }, fc)
+    : { x: 0, y: -fc.fh * 0.28 };
+
+  // Topo do rosto: ponto entre as sobrancelhas, deslocado um pouco para cima
+  const topOfFace = { x: browCenter.x, y: browCenter.y - fc.fh * 0.10 };
+
+  // Largura na linha dos olhos (mais estável que a largura total em perfis)
+  const eyeSpan = (leftEye && rightEye) ? dist(leftEye, rightEye) : fc.fw;
+
+  return { browCenter, topOfFace, eyeSpan };
+}
+
 function stableFaceAngle(p) {
   const pairs = [
     [p[33], p[263]],
@@ -673,15 +698,10 @@ function stableFaceAngle(p) {
   return Math.atan2(sy, sx);
 }
 
-/**
- * Olho: centro entre cantos externo + interno e raio derivado do comprimento.
- * Robusto a pose lateral porque usa o par do próprio olho.
- */
 function eyeInfo(p, a, b, c, d) {
   if (!p[a] || !p[b]) return null;
   const center = { x: (p[a].x + p[b].x) / 2, y: (p[a].y + p[b].y) / 2 };
   const radius = Math.max(1, dist(p[a], p[b]) * 0.5);
-  // cantos internos reforçam a precisão do centro
   if (p[c] && p[d]) {
     center.x = (center.x + (p[c].x + p[d].x) / 2) / 2;
     center.y = (center.y + (p[c].y + p[d].y) / 2) / 2;
@@ -690,14 +710,12 @@ function eyeInfo(p, a, b, c, d) {
 }
 
 function eyeCenters(p) {
-  const left  = eyeInfo(p, 33, 133, 159, 145);
-  const right = eyeInfo(p, 362, 263, 386, 374);
-  return { left, right };
+  return {
+    left:  eyeInfo(p, 33, 133, 159, 145),
+    right: eyeInfo(p, 362, 263, 386, 374)
+  };
 }
 
-/**
- * Boca: média dos 4 pontos principais (13, 14, 61, 291) + largura.
- */
 function mouthInfo(p) {
   const ids = [13, 14, 61, 291];
   let sx = 0, sy = 0, n = 0;
@@ -706,54 +724,52 @@ function mouthInfo(p) {
     sx += p[i].x; sy += p[i].y; n++;
   }
   if (n === 0) return null;
-  const center = { x: sx / n, y: sy / n };
-  const width = (p[61] && p[291]) ? dist(p[61], p[291]) : 0;
-  const height = (p[13] && p[14]) ? dist(p[13], p[14]) : 0;
-  return { center, width, height };
+  return {
+    center: { x: sx / n, y: sy / n },
+    width: (p[61] && p[291]) ? dist(p[61], p[291]) : 0,
+    height: (p[13] && p[14]) ? dist(p[13], p[14]) : 0
+  };
 }
 
-/**
- * Nariz: base (entre 4 e 6) tem melhor centro que a ponta bruta (1).
- */
 function noseInfo(p) {
-  if (!p[4] || !p[6]) return p[1] ? { center: p[1] } : null;
+  if (!p[4] || !p[6]) return p[1] ? { center: p[1], tip: p[1] } : null;
   return { center: { x: (p[4].x + p[6].x) / 2, y: (p[4].y + p[6].y) / 2 }, tip: p[1] || null };
 }
 
 /**
- * Contexto por rosto. Aplica rejeição de landmarks colapsados (perfil) na
- * largura — se 234→454 encolheu demais em relação à altura, tratamos como
- * medida parcial e mantemos a última largura válida.
+ * Contexto completo do rosto — tudo em pixels da tela (canvas).
+ * - cx, cy: centro do rosto
+ * - fw, fh: largura e altura
+ * - ang: ângulo (limitado a ±MAX_ANGLE)
+ * - browY: Y local da linha das sobrancelhas (negativo = acima do centro)
+ * - topY: Y local do topo do rosto (onde ficam chapéus/coroas)
+ * - profile: true se o rosto estiver virado (afeta opacidade de filtros simétricos)
  */
 function computeFaceContext(p, state) {
   const cxRaw = (p[234].x + p[454].x) / 2;
   const cyRaw = (p[10].y + p[152].y) / 2;
   const widthRaw = dist(p[234], p[454]);
   const height = dist(p[10], p[152]);
-
   const collapsed = height > 0 && widthRaw < height * FACE_COLLAPSE_RATIO;
   const s = state.smoothing;
 
-  if (!collapsed) {
-    s.width = smooth(s.width, widthRaw, 0.35);
-  }
+  if (!collapsed) s.width = smooth(s.width, widthRaw, 0.35);
   if (s.width === null) s.width = widthRaw;
-
   s.cx = smooth(s.cx, cxRaw, 0.35);
   s.cy = smooth(s.cy, cyRaw, 0.35);
 
   const angleRaw = stableFaceAngle(p);
   s.angle = angleLerp(s.angle, angleRaw, ANGLE_SMOOTHING);
 
-  const fw = s.width;
-  const fh = height;
+  // Limita o ângulo para evitar filtros "torcidos"
+  const ang = clamp(s.angle ?? 0, -MAX_ANGLE, MAX_ANGLE);
 
-  return {
+  const fc = {
     cx: s.cx,
     cy: s.cy,
-    fw,
-    fh,
-    ang: s.angle ?? 0,
+    fw: s.width,
+    fh: height,
+    ang,
     eyes: eyeCenters(p),
     mouth: mouthInfo(p),
     nose: noseInfo(p),
@@ -762,13 +778,19 @@ function computeFaceContext(p, state) {
     left: p[234],
     right: p[454]
   };
-}
 
-function withFace(c, fc, fn) {
-  c.save();
-  c.translate(fc.cx, fc.cy);
-  c.rotate(fc.ang);
-  try { fn(); } finally { c.restore(); }
+  // Linha das sobrancelhas / topo do rosto (referencial local)
+  const axis = stableFaceAxis(p, fc);
+  fc.browY = axis.browCenter.y;
+  fc.topY = axis.topOfFace.y;
+  fc.eyeSpan = axis.eyeSpan;
+
+  // Perfil: largura relativa à altura
+  fc.profile = height > 0 && (fc.fw / height) < PROFILE_RATIO;
+  // Opacidade efetiva para filtros simétricos (chifres, coroa, etc.)
+  fc.symmetryAlpha = fc.profile ? 0.55 : 1;
+
+  return fc;
 }
 
 /* -------------------------- Filtros disponíveis ------------------------ */
@@ -777,15 +799,17 @@ const FILTERS = [
   { id: 'pumpkin',  name: 'Abóbora',     emoji: '🎃' },
   { id: 'skull',    name: 'Caveira',     emoji: '💀' },
   { id: 'vampire',  name: 'Vampiro',     emoji: '🧛' },
-  { id: 'witch',    name: 'Bruxa',       emoji: '🧙' },
+  { id: 'crown',    name: 'Coroa',       emoji: '👑' },
   { id: 'zombie',   name: 'Zumbi',       emoji: '🧟' },
-  { id: 'cat',      name: 'Gato',        emoji: '🐱' },
+  { id: 'horns',    name: 'Chifres',     emoji: '😈' },
   { id: 'clown',    name: 'Palhaço',     emoji: '🤡' },
   { id: 'ghost',    name: 'Fantasma',    emoji: '👻' },
-  { id: 'devil',    name: 'Diabo',       emoji: '😈' },
+  { id: 'devil',    name: 'Diabo',       emoji: '👹' },
   { id: 'skeleton', name: 'Esqueleto',   emoji: '☠️' },
+  { id: 'mummy',    name: 'Múmia',       emoji: '🧻' },
+  { id: 'pirate',   name: 'Pirata',      emoji: '🏴‍☠️' },
   { id: 'glow',     name: 'Olhos Glow',  emoji: '✨' },
-  { id: 'neon',     name: 'Neon',        emoji: '🌈' }
+  { id: 'aura',     name: 'Aura',        emoji: '🌟' }
 ];
 
 function buildFilterButtons() {
@@ -1147,15 +1171,17 @@ function drawFilter(c, p, W, H, st) {
     case 'pumpkin':    drawPumpkin(c, fc, colors, I);    break;
     case 'skull':      drawSkull(c, fc, colors, I);      break;
     case 'vampire':    drawVampire(c, fc, colors, I);    break;
-    case 'witch':      drawWitch(c, fc, colors, I);      break;
+    case 'crown':      drawCrown(c, fc, colors, I);      break;
     case 'zombie':     drawZombie(c, fc, colors, I);     break;
-    case 'cat':        drawCat(c, fc, colors, I);        break;
+    case 'horns':      drawHorns(c, fc, colors, I);      break;
     case 'clown':      drawClown(c, fc, colors, I);      break;
     case 'ghost':      drawGhost(c, fc, colors, I);      break;
     case 'devil':      drawDevil(c, fc, colors, I);      break;
     case 'skeleton':   drawSkeleton(c, fc, colors, I);   break;
+    case 'mummy':      drawMummy(c, fc, colors, I);      break;
+    case 'pirate':     drawPirate(c, fc, colors, I);     break;
     case 'glow':       drawGlow(c, fc, colors, I);       break;
-    case 'neon':       drawNeon(c, fc, colors, I);       break;
+    case 'aura':       drawAura(c, fc, colors, I);       break;
   }
   c.restore();
 }
@@ -1330,52 +1356,75 @@ function drawVampire(c, fc, colors, I) {
   });
 }
 
-/* -------------------------------- Bruxa -------------------------------- */
+/* -------------------------------- Coroa -------------------------------- */
 /**
- * Chapéu ancorado no centro do rosto, deslocado em eixo local para cima.
- * Escala em `fw` (largura estável) e não em `top` bruto — elimina o tombo.
+ * CORRIGIDA: usa fc.topY (topo estável via sobrancelhas) e largura fc.fw,
+ * o que a mantém assentada na testa e alinhada mesmo com o rosto inclinado.
+ * A base da coroa fica no topo do rosto e as pontas sobem em relação ao eixo
+ * local (que acompanha a rotação do rosto).
  */
-function drawWitch(c, fc, colors, I) {
-  const hatW = fc.fw * 1.05;
-  const hatH = fc.fh * 1.05;
-  const baseY = -fc.fh * 0.55;  // topo do crânio em eixo local
+function drawCrown(c, fc, colors, I) {
+  const bandY = fc.topY + fc.fh * 0.02; // base da coroa, levemente acima das sobrancelhas
+  const bandH = fc.fh * 0.10;
+  const bandW = fc.fw * 1.10;
+  const points = 7;
+  const gold = mixHex(colors.face, '#ffd166', 0.55);
+  const goldLight = mixHex(colors.face, '#fff2b0', 0.65);
+  const goldDark  = mixHex(colors.face, '#7a4c00', 0.6);
 
   withFace(c, fc, () => {
-    c.globalAlpha = I;
+    c.globalAlpha = I * fc.symmetryAlpha;
 
-    // aba (leve curvatura pra cima nas pontas)
-    c.fillStyle = '#150a24';
+    // Corpo da coroa (banda com perspectiva achatada)
+    const band = c.createLinearGradient(0, bandY - bandH, 0, bandY + bandH);
+    band.addColorStop(0, goldLight);
+    band.addColorStop(0.55, gold);
+    band.addColorStop(1, goldDark);
+    c.fillStyle = band;
     c.beginPath();
-    c.ellipse(0, baseY, hatW * 0.75, fc.fh * 0.12, 0, 0, Math.PI * 2);
-    c.fill();
-
-    // aba superior (dá profundidade)
-    c.fillStyle = '#241040';
-    c.beginPath();
-    c.ellipse(0, baseY - fc.fh * 0.015, hatW * 0.72, fc.fh * 0.10, 0, 0, Math.PI * 2);
-    c.fill();
-
-    // cone com leve inclinação lateral
-    const tilt = hatW * 0.06;
-    const grad = c.createLinearGradient(-hatW * 0.3, baseY, hatW * 0.3, baseY - hatH);
-    grad.addColorStop(0, '#2a1050');
-    grad.addColorStop(1, '#0a0420');
-    c.fillStyle = grad;
-    c.beginPath();
-    c.moveTo(-hatW * 0.32, baseY);
-    c.quadraticCurveTo(-hatW * 0.18, baseY - hatH * 0.55, tilt, baseY - hatH);
-    c.quadraticCurveTo(-hatW * 0.02, baseY - hatH * 0.55, hatW * 0.32, baseY);
+    c.moveTo(-bandW / 2, bandY);
+    c.quadraticCurveTo(0, bandY - bandH * 0.55, bandW / 2, bandY);
+    c.quadraticCurveTo(bandW / 2 - bandH * 0.2, bandY + bandH * 0.9, bandW * 0.35, bandY + bandH * 1.05);
+    c.quadraticCurveTo(0, bandY + bandH * 1.35, -bandW * 0.35, bandY + bandH * 1.05);
+    c.quadraticCurveTo(-bandW / 2 + bandH * 0.2, bandY + bandH * 0.9, -bandW / 2, bandY);
     c.closePath();
     c.fill();
 
-    // fivela com a cor do usuário
-    const buckleW = hatW * 0.26;
-    const buckleH = hatH * 0.13;
-    const buckleY = baseY - hatH * 0.10;
-    c.fillStyle = rgba(colors.face, 0.98);
-    c.fillRect(-buckleW / 2, buckleY - buckleH / 2, buckleW, buckleH);
-    c.fillStyle = '#0a0420';
-    c.fillRect(-buckleW * 0.32, buckleY - buckleH * 0.22, buckleW * 0.64, buckleH * 0.44);
+    // Pontas em leque subindo
+    const tipH = bandH * 2.4;
+    for (let i = 0; i < points; i++) {
+      const t = i / (points - 1);
+      const px = -bandW * 0.42 + bandW * 0.84 * t;
+      const lift = Math.sin(t * Math.PI) * bandH * 0.4;
+      const py = bandY - lift;
+      const w = (bandW / points) * 0.42;
+      const tipColor = i % 2 === 0 ? goldLight : gold;
+      c.fillStyle = tipColor;
+      c.beginPath();
+      c.moveTo(px - w, py + bandH * 0.4);
+      c.lineTo(px, py - tipH);
+      c.lineTo(px + w, py + bandH * 0.4);
+      c.closePath();
+      c.fill();
+
+      // Pedra na base da ponta
+      c.fillStyle = i === Math.floor(points / 2) ? colors.eyes : colors.mouth;
+      c.beginPath();
+      c.arc(px, py + bandH * 0.55, bandH * 0.28, 0, Math.PI * 2);
+      c.fill();
+      c.strokeStyle = 'rgba(0,0,0,0.35)';
+      c.lineWidth = Math.max(1, bandH * 0.05);
+      c.stroke();
+    }
+
+    // Brilho central
+    const sheen = c.createRadialGradient(-bandW * 0.15, bandY + bandH * 0.4, 1, -bandW * 0.15, bandY + bandH * 0.4, bandW * 0.5);
+    sheen.addColorStop(0, 'rgba(255,255,255,0.35)');
+    sheen.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = sheen;
+    c.beginPath();
+    c.ellipse(0, bandY + bandH * 0.6, bandW * 0.45, bandH * 0.9, 0, 0, Math.PI * 2);
+    c.fill();
   });
 }
 
@@ -1433,60 +1482,70 @@ function drawZombie(c, fc, colors, I) {
   });
 }
 
-/* --------------------------------- Gato -------------------------------- */
+/* ------------------------------- Chifres ------------------------------- */
 /**
- * Orelhas ancoradas nos trágus (234/454) — posicionam melhor que o topo da
- * testa, especialmente em perfis.
+ * CORRIGIDOS: base assentada em fc.topY (linha das sobrancelhas), subindo
+ * no eixo local do rosto. Espelhamento correto (chifre da esquerda à esquerda
+ * na tela quando não espelhado; ao espelhar, tudo se inverte coerentemente).
+ * Curva interna côncava, ponta para cima — nada de cabeça para baixo.
  */
-function drawCat(c, fc, colors, I) {
-  const inner = mixHex(colors.face, '#ffffff', 0.55);
+function drawHorns(c, fc, colors, I) {
+  const baseY = fc.topY + fc.fh * 0.02;
+  const hornH = fc.fh * 0.80;
+  const baseW = fc.fw * 0.15;
+  const spread = fc.fw * 0.36;
 
   withFace(c, fc, () => {
-    c.globalAlpha = I;
-
-    // topo efetivo: linha por cima das sobrancelhas
-    const earY = -fc.fh * 0.35;
-    const leftX = -fc.fw * 0.48;
-    const rightX = fc.fw * 0.48;
+    c.globalAlpha = I * fc.symmetryAlpha;
 
     for (const side of [-1, 1]) {
-      const bx = side > 0 ? rightX : leftX;
-      c.fillStyle = colors.face;
+      const bx = side * spread;
+
+      // Corpo do chifre: base larga, curva para fora, ponta para cima
+      const grd = c.createLinearGradient(bx, baseY, bx + side * baseW * 0.4, baseY - hornH);
+      grd.addColorStop(0, mixHex(colors.face, '#3a0a10', 0.55));
+      grd.addColorStop(0.55, mixHex(colors.face, '#7a1a20', 0.35));
+      grd.addColorStop(1, mixHex(colors.face, '#2a0008', 0.7));
+
+      c.fillStyle = grd;
       c.beginPath();
-      c.moveTo(bx * 0.75, earY + fc.fh * 0.10);
-      c.lineTo(bx, earY - fc.fh * 0.30);
-      c.lineTo(bx * 0.35, earY - fc.fh * 0.06);
+      // base esquerda
+      c.moveTo(bx - baseW, baseY);
+      // curva externa subindo
+      c.quadraticCurveTo(
+        bx + side * baseW * 1.15, baseY - hornH * 0.55,
+        bx + side * baseW * 0.05, baseY - hornH
+      );
+      // curva interna descendo
+      c.quadraticCurveTo(
+        bx - side * baseW * 0.55, baseY - hornH * 0.55,
+        bx + baseW, baseY
+      );
       c.closePath();
       c.fill();
 
-      c.fillStyle = inner;
-      c.beginPath();
-      c.moveTo(bx * 0.72, earY + fc.fh * 0.06);
-      c.lineTo(bx * 0.92, earY - fc.fh * 0.22);
-      c.lineTo(bx * 0.42, earY - fc.fh * 0.04);
-      c.closePath();
-      c.fill();
-    }
-
-    if (fc.mouth) {
-      const mp = toLocal(fc.mouth.center, fc);
-      c.strokeStyle = 'rgba(255,255,255,0.9)';
+      // Aresta de luz na cor dos olhos
+      c.strokeStyle = rgba(colors.eyes, 0.85);
       c.lineWidth = Math.max(1.5, fc.fw * 0.012);
-      for (const side of [-1, 1]) {
-        for (let k = 0; k < 3; k++) {
-          c.beginPath();
-          c.moveTo(mp.x + side * fc.fw * 0.15, mp.y - fc.fh * 0.02 + k * fc.fh * 0.03);
-          c.lineTo(mp.x + side * fc.fw * 0.55, mp.y - fc.fh * 0.05 + k * fc.fh * 0.06);
-          c.stroke();
-        }
-      }
-      c.fillStyle = mixHex(colors.mouth, '#ff7aa0', 0.4);
       c.beginPath();
-      c.moveTo(mp.x - fc.fw * 0.03, mp.y - fc.fh * 0.06);
-      c.lineTo(mp.x + fc.fw * 0.03, mp.y - fc.fh * 0.06);
-      c.lineTo(mp.x, mp.y - fc.fh * 0.02);
-      c.closePath();
-      c.fill();
+      c.moveTo(bx - baseW * 0.55, baseY - baseW * 0.15);
+      c.quadraticCurveTo(
+        bx + side * baseW * 0.9, baseY - hornH * 0.55,
+        bx + side * baseW * 0.05, baseY - hornH
+      );
+      c.stroke();
+
+      // Anéis de textura (sobem proporcionalmente)
+      c.strokeStyle = 'rgba(0,0,0,0.35)';
+      c.lineWidth = Math.max(1, fc.fw * 0.006);
+      for (let k = 1; k <= 4; k++) {
+        const gy = baseY - hornH * (k / 5);
+        const gw = baseW * (1 - k / 5) * 0.85;
+        c.beginPath();
+        c.moveTo(bx - gw, gy);
+        c.quadraticCurveTo(bx, gy - gw * 0.4, bx + gw, gy);
+        c.stroke();
+      }
     }
   });
 }
@@ -1568,24 +1627,43 @@ function drawGhost(c, fc, colors, I) {
 }
 
 /* -------------------------------- Diabo -------------------------------- */
+/**
+ * CORRIGIDO: chifres assentados na testa (fc.topY), subindo no eixo local,
+ * seguindo o mesmo princípio dos "horns" — antes ficava de cabeça para baixo
+ * em certas poses.
+ */
 function drawDevil(c, fc, colors, I) {
-  withFace(c, fc, () => {
-    c.globalAlpha = I;
-    const baseY = -fc.fh * 0.28;
+  const baseY = fc.topY + fc.fh * 0.02;
+  const hornH = fc.fh * 0.55;
+  const baseW = fc.fw * 0.10;
+  const spread = fc.fw * 0.26;
 
-    c.fillStyle = rgba(colors.face, 1);
-    c.strokeStyle = 'rgba(60,0,0,0.7)';
-    c.lineWidth = Math.max(1.5, fc.fw * 0.012);
+  withFace(c, fc, () => {
+    c.globalAlpha = I * fc.symmetryAlpha;
+
+    // Chifres vermelhos curvados para dentro (estilo diabo clássico)
     for (const side of [-1, 1]) {
+      const bx = side * spread;
+      c.fillStyle = rgba(colors.face, 1);
+      c.strokeStyle = 'rgba(60,0,0,0.7)';
+      c.lineWidth = Math.max(1.5, fc.fw * 0.012);
+
       c.beginPath();
-      c.moveTo(side * fc.fw * 0.22, baseY);
-      c.quadraticCurveTo(side * fc.fw * 0.42, baseY - fc.fh * 0.22, side * fc.fw * 0.30, baseY - fc.fh * 0.35);
-      c.quadraticCurveTo(side * fc.fw * 0.16, baseY - fc.fh * 0.15, side * fc.fw * 0.10, baseY + fc.fh * 0.02);
+      c.moveTo(bx - baseW, baseY);
+      c.quadraticCurveTo(
+        bx + side * baseW * 2.2, baseY - hornH * 0.55,
+        bx + side * baseW * 1.5, baseY - hornH
+      );
+      c.quadraticCurveTo(
+        bx + side * baseW * 0.2, baseY - hornH * 0.55,
+        bx + baseW, baseY
+      );
       c.closePath();
       c.fill();
       c.stroke();
     }
 
+    // Olhos brilhantes
     for (const e of [fc.eyes.left, fc.eyes.right]) {
       if (!e) continue;
       const ep = toLocal(e.center, fc);
@@ -1647,6 +1725,174 @@ function drawSkeleton(c, fc, colors, I) {
   });
 }
 
+/* -------------------------------- Múmia -------------------------------- */
+/**
+ * Faixas brancas cruzando o rosto (baseado na geometria do esqueleto/caveira).
+ * Desenha faixas horizontais e diagonais com sombreamento, usando as medidas
+ * estáveis fw/fh — funciona bem em qualquer inclinação.
+ */
+function drawMummy(c, fc, colors, I) {
+  withFace(c, fc, () => {
+    c.globalAlpha = I * 0.92;
+
+    const bandColor = mixHex(colors.face, '#efe6cf', 0.88);
+    const bandShadow = mixHex(colors.face, '#6b5d3e', 0.6);
+    const rx = fc.fw * 0.58;
+    const ry = fc.fh * 0.60;
+
+    // Base clara (rosto enfaixado)
+    c.fillStyle = bandColor;
+    c.beginPath();
+    c.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    c.fill();
+
+    // Faixas horizontais cruzadas com leve inclinação alternada
+    const bands = 7;
+    for (let i = 0; i < bands; i++) {
+      const t = i / (bands - 1);
+      const y = -ry * 0.85 + ry * 1.7 * t;
+      const tilt = (i % 2 === 0 ? 1 : -1) * fc.fh * 0.06;
+      const width = rx * 2.05;
+
+      c.fillStyle = i % 2 === 0 ? bandColor : mixHex(colors.face, '#d9cba6', 0.75);
+      c.beginPath();
+      c.moveTo(-width / 2, y - fc.fh * 0.035);
+      c.lineTo(width / 2, y - fc.fh * 0.035 + tilt);
+      c.lineTo(width / 2, y + fc.fh * 0.035 + tilt);
+      c.lineTo(-width / 2, y + fc.fh * 0.035);
+      c.closePath();
+      c.fill();
+
+      // Sombra inferior de cada faixa
+      c.strokeStyle = bandShadow;
+      c.lineWidth = Math.max(1, fc.fw * 0.008);
+      c.beginPath();
+      c.moveTo(-width / 2, y + fc.fh * 0.04);
+      c.lineTo(width / 2, y + fc.fh * 0.04 + tilt);
+      c.stroke();
+    }
+
+    // Recorte: olhos escuros por cima das faixas
+    for (const e of [fc.eyes.left, fc.eyes.right]) {
+      if (!e) continue;
+      const ep = toLocal(e.center, fc);
+      c.fillStyle = 'rgba(0,0,0,0.9)';
+      c.beginPath();
+      c.ellipse(ep.x, ep.y, e.radius * 1.3, e.radius * 1.0, 0, 0, Math.PI * 2);
+      c.fill();
+      // Brilho na cor dos olhos
+      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, e.radius * 1.3);
+      g.addColorStop(0, rgba(colors.eyes, 0.7));
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = g;
+      c.beginPath();
+      c.ellipse(ep.x, ep.y, e.radius * 1.3, e.radius * 1.0, 0, 0, Math.PI * 2);
+      c.fill();
+    }
+
+    // Boca costurada (na cor da boca)
+    if (fc.mouth) {
+      const mp = toLocal(fc.mouth.center, fc);
+      const mw = Math.max(fc.mouth.width, fc.fw * 0.35);
+      c.strokeStyle = rgba(colors.mouth, 0.9);
+      c.lineWidth = Math.max(2, fc.fw * 0.014);
+      c.beginPath();
+      c.moveTo(mp.x - mw / 2, mp.y);
+      c.lineTo(mp.x + mw / 2, mp.y);
+      c.stroke();
+      for (let i = -3; i <= 3; i++) {
+        const x = mp.x + (mw / 6) * i;
+        c.beginPath();
+        c.moveTo(x, mp.y - fc.fh * 0.03);
+        c.lineTo(x, mp.y + fc.fh * 0.03);
+        c.stroke();
+      }
+    }
+  });
+}
+
+/* -------------------------------- Pirata ------------------------------- */
+/**
+ * Bandana + tapa-olho + cicatriz (mesma lógica de ancoramento estável).
+ */
+function drawPirate(c, fc, colors, I) {
+  const bandY = fc.topY + fc.fh * 0.05;
+  const bandH = fc.fh * 0.12;
+  const bandW = fc.fw * 1.10;
+
+  withFace(c, fc, () => {
+    c.globalAlpha = I * fc.symmetryAlpha;
+
+    // Bandana vermelha (base baseada na linha das sobrancelhas)
+    const band = c.createLinearGradient(0, bandY - bandH, 0, bandY + bandH);
+    band.addColorStop(0, mixHex(colors.face, '#e0002a', 0.6));
+    band.addColorStop(0.6, mixHex(colors.face, '#a50020', 0.55));
+    band.addColorStop(1, mixHex(colors.face, '#5a0010', 0.6));
+    c.fillStyle = band;
+    c.beginPath();
+    c.moveTo(-bandW / 2, bandY);
+    c.quadraticCurveTo(0, bandY - bandH * 0.6, bandW / 2, bandY);
+    c.lineTo(bandW / 2, bandY + bandH);
+    c.quadraticCurveTo(0, bandY + bandH * 1.4, -bandW / 2, bandY + bandH);
+    c.closePath();
+    c.fill();
+
+    // Nó no lado direito da bandana
+    c.fillStyle = mixHex(colors.face, '#a50020', 0.55);
+    c.beginPath();
+    c.ellipse(bandW * 0.45, bandY + bandH * 0.6, bandH * 0.5, bandH * 0.4, -0.4, 0, Math.PI * 2);
+    c.fill();
+    // Ponta do nó
+    c.beginPath();
+    c.moveTo(bandW * 0.45, bandY + bandH * 0.6);
+    c.lineTo(bandW * 0.55, bandY + bandH * 1.5);
+    c.lineTo(bandW * 0.40, bandY + bandH * 1.4);
+    c.closePath();
+    c.fill();
+
+    // Tapa-olho (sobre o olho esquerdo — lado esquerdo da tela = lado do usuário)
+    if (fc.eyes.left) {
+      const ep = toLocal(fc.eyes.left.center, fc);
+      const rr = Math.max(fc.eyes.left.radius * 2.0, fc.fw * 0.11);
+      c.fillStyle = 'rgba(20,10,10,0.95)';
+      c.beginPath();
+      c.ellipse(ep.x, ep.y, rr, rr * 0.75, -0.15, 0, Math.PI * 2);
+      c.fill();
+      // Cordão cruzando o rosto
+      c.strokeStyle = 'rgba(20,10,10,0.9)';
+      c.lineWidth = Math.max(1.5, fc.fw * 0.012);
+      c.beginPath();
+      c.moveTo(ep.x - rr, ep.y - rr * 0.3);
+      c.lineTo(-fc.fw * 0.55, -fc.fh * 0.30);
+      c.stroke();
+      c.beginPath();
+      c.moveTo(ep.x + rr, ep.y + rr * 0.2);
+      c.lineTo(fc.fw * 0.55, fc.fh * 0.15);
+      c.stroke();
+    }
+
+    // Cicatriz no outro lado (direito)
+    if (fc.eyes.right) {
+      const ep = toLocal(fc.eyes.right.center, fc);
+      c.strokeStyle = 'rgba(180,30,30,0.85)';
+      c.lineWidth = Math.max(2, fc.fw * 0.014);
+      c.beginPath();
+      c.moveTo(ep.x - fc.fw * 0.04, ep.y - fc.fh * 0.20);
+      c.lineTo(ep.x + fc.fw * 0.04, ep.y + fc.fh * 0.22);
+      c.stroke();
+      // Traços transversais (pontos de sutura)
+      for (let k = -2; k <= 2; k++) {
+        const cx = ep.x;
+        const cy = ep.y + k * fc.fh * 0.06;
+        c.beginPath();
+        c.moveTo(cx - fc.fw * 0.02, cy);
+        c.lineTo(cx + fc.fw * 0.02, cy);
+        c.stroke();
+      }
+    }
+  });
+}
+
 /* ------------------------------ Olhos Glow ----------------------------- */
 function drawGlow(c, fc, colors, I) {
   withFace(c, fc, () => {
@@ -1667,92 +1913,77 @@ function drawGlow(c, fc, colors, I) {
   });
 }
 
-/* --------------------------------- Neon -------------------------------- */
-/**
- * Multi-anel com pulsação. Usa composição 'lighter' em 4 passadas
- * (núcleo branco, cor pura, cor média, cor fraca) sem shadowBlur.
- * Anéis: face (FACE_OVAL), olhos, boca, sobrancelhas.
- */
-const FACE_OVAL = [
-  10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
-  397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
-  172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109
-];
-const EYE_LEFT_LOOP  = [33, 133, 159, 145, 153, 154, 155, 33];
-const EYE_RIGHT_LOOP = [263, 362, 386, 374, 380, 381, 382, 263];
-const MOUTH_OUTER    = [
-  61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185
-];
-const BROW_LEFT  = [46, 53, 52, 65, 55, 70, 63, 105, 66, 107];
-const BROW_RIGHT = [276, 283, 282, 295, 285, 300, 293, 334, 296, 336];
-
-function neonStrokeRing(c, points, color, pulse, baseWidth) {
-  if (!points || points.length < 2) return;
-  c.beginPath();
-  c.moveTo(points[0].x, points[0].y);
-  for (let i = 1; i < points.length; i++) c.lineTo(points[i].x, points[i].y);
-
-  c.strokeStyle = rgba(color, 0.20 * pulse);
-  c.lineWidth = baseWidth * 6.0;
-  c.stroke();
-
-  c.strokeStyle = rgba(color, 0.45 * pulse);
-  c.lineWidth = baseWidth * 2.8;
-  c.stroke();
-
-  c.strokeStyle = rgba(color, 1.0 * pulse);
-  c.lineWidth = baseWidth;
-  c.stroke();
-
-  c.strokeStyle = `rgba(255,255,255,${0.75 * pulse})`;
-  c.lineWidth = Math.max(0.8, baseWidth * 0.4);
-  c.stroke();
-}
-
-function drawNeon(c, fc, colors, I) {
-  const t = performance.now() / 500;
-  const pulse = 0.85 + 0.15 * Math.sin(t);
-
-  c.save();
-  c.globalAlpha = I;
-  c.lineJoin = 'round';
-  c.lineCap = 'round';
-  c.globalCompositeOperation = 'lighter';
-
-  const facePts  = FACE_OVAL.map(i => c.__p ? c.__p[i] : null);
-  const faceCol  = colors.face;
-  const eyeCol   = colors.eyes;
-  const mouthCol = colors.mouth;
-
-  const baseFace  = Math.max(1.6, fc.fw * 0.012);
-  const baseEye   = Math.max(1.0, fc.fw * 0.008);
-  const baseMouth = Math.max(1.0, fc.fw * 0.009);
-
-  // Face — desenhamos com landmarks brutos do próprio contexto (fora do sistema local)
-  // como neon contorna o rosto, é mais fiel ao pixel.
-  const ringFace = c.__p ? FACE_OVAL.map(i => c.__p[i]).filter(Boolean) : null;
-  if (ringFace) {
-    c.save();
-    c.setTransform(c.getTransform());
-    neonStrokeRing(c, ringFace, faceCol, pulse, baseFace);
-    c.restore();
-  }
+/* -------------------------------- Aura --------------------------------- */
+function drawAura(c, fc, colors, I) {
+  const t = performance.now() / 1000;
+  const pulse = 0.85 + 0.15 * Math.sin(t * 2);
+  const rx = fc.fw * 0.82;
+  const ry = fc.fh * 0.78;
 
   withFace(c, fc, () => {
-    const ringEyeL = EYE_LEFT_LOOP.map(i => c.__p && c.__p[i]).filter(Boolean);
-    const ringEyeR = EYE_RIGHT_LOOP.map(i => c.__p && c.__p[i]).filter(Boolean);
-    const ringMouth = MOUTH_OUTER.map(i => c.__p && c.__p[i]).filter(Boolean);
-    const browL = BROW_LEFT.map(i => c.__p && c.__p[i]).filter(Boolean);
-    const browR = BROW_RIGHT.map(i => c.__p && c.__p[i]).filter(Boolean);
+    c.globalAlpha = I;
+    c.globalCompositeOperation = 'lighter';
 
-    neonStrokeRing(c, ringEyeL, eyeCol, pulse, baseEye);
-    neonStrokeRing(c, ringEyeR, eyeCol, pulse, baseEye);
-    neonStrokeRing(c, ringMouth, mouthCol, pulse, baseMouth);
-    neonStrokeRing(c, browL, faceCol, pulse, baseEye * 0.9);
-    neonStrokeRing(c, browR, faceCol, pulse, baseEye * 0.9);
+    const halo = c.createRadialGradient(0, 0, rx * 0.35, 0, 0, rx);
+    halo.addColorStop(0, rgba(colors.face, 0));
+    halo.addColorStop(0.55, rgba(colors.face, 0.35 * pulse));
+    halo.addColorStop(0.85, rgba(colors.face, 0.12 * pulse));
+    halo.addColorStop(1, rgba(colors.face, 0));
+    c.fillStyle = halo;
+    c.beginPath();
+    c.ellipse(0, 0, rx * 1.35, ry * 1.35, 0, 0, Math.PI * 2);
+    c.fill();
+
+    c.strokeStyle = rgba(colors.face, 0.75 * pulse);
+    c.lineWidth = Math.max(2, fc.fw * 0.02);
+    c.beginPath();
+    c.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    c.stroke();
+
+    c.strokeStyle = rgba(colors.face, 0.35 * pulse);
+    c.lineWidth = Math.max(4, fc.fw * 0.05);
+    c.beginPath();
+    c.ellipse(0, 0, rx * 1.06, ry * 1.06, 0, 0, Math.PI * 2);
+    c.stroke();
+
+    const orbitR = fc.fw * 0.62;
+    const orbitRy = fc.fh * 0.60;
+    const baseHue = (t * 40 + (hexToRgb(colors.eyes).r * 0.6)) % 360;
+    const segments = 5;
+
+    for (let i = 0; i < segments; i++) {
+      const hue = (baseHue + i * 60) % 360;
+      const start = (t * 1.2 + i * (Math.PI * 2 / segments)) % (Math.PI * 2);
+      const end = start + Math.PI * 2 / segments - 0.08;
+      c.strokeStyle = `hsla(${hue}, 100%, 60%, ${0.75 * pulse})`;
+      c.lineWidth = Math.max(2, fc.fw * 0.014);
+      c.beginPath();
+      c.ellipse(0, 0, orbitR, orbitRy, 0, start, end);
+      c.stroke();
+
+      c.strokeStyle = `hsla(${hue}, 100%, 90%, ${0.85 * pulse})`;
+      c.lineWidth = Math.max(0.8, fc.fw * 0.005);
+      c.beginPath();
+      c.ellipse(0, 0, orbitR, orbitRy, 0, start, end);
+      c.stroke();
+    }
+
+    for (let i = 0; i < 3; i++) {
+      const a = t * 1.5 + i * (Math.PI * 2 / 3);
+      const bx = Math.cos(a) * orbitR;
+      const by = Math.sin(a) * orbitRy;
+      const br = Math.max(2, fc.fw * 0.012);
+      const g = c.createRadialGradient(bx, by, 0, bx, by, br * 3);
+      g.addColorStop(0, rgba(colors.eyes, 0.9 * pulse));
+      g.addColorStop(1, rgba(colors.eyes, 0));
+      c.fillStyle = g;
+      c.beginPath();
+      c.arc(bx, by, br * 3, 0, Math.PI * 2);
+      c.fill();
+    }
+
+    c.globalCompositeOperation = 'source-over';
   });
-
-  c.restore();
 }
 
 /* =========================================================================
@@ -1857,7 +2088,6 @@ async function doCapture() {
   if (snap.bitmap) snap.source.close?.();
 
   if (state.faces.length > 0) {
-    // reset de suavização na captura evita puxar histórico da prévia
     resetSmoothing();
     for (const face of state.faces) {
       const pts = landmarksToStage(face, snap.srcW, snap.srcH, outW, outH, state.mirror);
