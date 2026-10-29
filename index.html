@@ -1,0 +1,1921 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Filtros de Fantasia — Halloween</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0d0b14;
+    --panel: #1a1726;
+    --panel2: #241f33;
+    --accent: #b06cff;
+    --accent2: #ff7a33;
+    --accent2-dark: #d9521c;
+    --danger: #e25c5c;
+    --ok: #4ad27a;
+    --text: #ece9f5;
+    --muted: #9b93b8;
+    --border: #322b47;
+    --border2: #3d3556;
+  }
+  html, body { height: 100%; }
+  body {
+    font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background:
+      radial-gradient(1200px 600px at 50% -10%, #2a1c40 0%, transparent 60%),
+      radial-gradient(800px 400px at 90% 110%, #1d1230 0%, transparent 60%),
+      var(--bg);
+    color: var(--text);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    -webkit-tap-highlight-color: transparent;
+    font-feature-settings: "ss01", "cv11";
+  }
+  #stage, #panel, #filters-scroll, .btn, #btn-capture { user-select: none; }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: rgba(20, 17, 30, 0.85);
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(10px) saturate(140%);
+    -webkit-backdrop-filter: blur(10px) saturate(140%);
+    flex-shrink: 0;
+    z-index: 5;
+  }
+  header h1 {
+    font-size: 1.02rem;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    line-height: 1.1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  header h1 span { color: var(--accent2); }
+  header .spacer { margin-left: auto; }
+
+  .btn {
+    background: var(--panel2);
+    color: var(--text);
+    border: 1px solid var(--border2);
+    padding: 7px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 600;
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.08s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: inherit;
+  }
+  .btn:hover { background: #332b4a; border-color: #4a4068; }
+  .btn:active { transform: scale(0.97); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn.primary {
+    background: linear-gradient(135deg, var(--accent), #7a3ee0);
+    border-color: transparent;
+    color: #fff;
+  }
+  .btn.primary:hover { filter: brightness(1.1); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn[aria-pressed="true"] { border-color: var(--accent); background: #322a4d; }
+
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 10px;
+    gap: 10px;
+  }
+
+  #stage {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    background: #000;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.04);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #stage video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+    -webkit-transform: scaleX(-1);
+  }
+  body.no-mirror #stage video { transform: none; -webkit-transform: none; }
+
+  #stage canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  #stage .placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 20px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.9rem;
+    background: radial-gradient(circle at 50% 40%, #241a38 0%, #0d0b14 70%);
+    z-index: 2;
+  }
+  #stage .placeholder .icon { font-size: 3rem; opacity: 0.85; }
+  #stage .placeholder p { max-width: 340px; line-height: 1.45; }
+
+  #countdown {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 8rem;
+    font-weight: 900;
+    color: #fff;
+    text-shadow: 0 0 30px var(--accent2), 0 0 60px var(--accent);
+    z-index: 20;
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+  }
+  #countdown.show { display: flex; animation: pulse 0.9s ease; }
+  @keyframes pulse {
+    0%   { transform: scale(1.4); opacity: 0; }
+    30%  { transform: scale(1);   opacity: 1; }
+    100% { transform: scale(0.85); opacity: 0; }
+  }
+
+  #flash {
+    position: absolute;
+    inset: 0;
+    background: #fff;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 30;
+  }
+  #flash.fire { animation: flashAnim 0.35s ease-out; }
+  @keyframes flashAnim {
+    0%   { opacity: 0.9; }
+    100% { opacity: 0; }
+  }
+
+  #panel {
+    flex-shrink: 0;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 10px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+
+  #filters-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    display: flex;
+    gap: 8px;
+    padding: 2px 2px 6px;
+    scrollbar-width: thin;
+    scrollbar-color: #4a3f66 transparent;
+    min-height: 0;
+  }
+  #filters-scroll::-webkit-scrollbar { height: 6px; }
+  #filters-scroll::-webkit-scrollbar-thumb { background: #4a3f66; border-radius: 3px; }
+  #filters-scroll::-webkit-scrollbar-track { background: transparent; }
+
+  .filter-btn {
+    flex: 0 0 auto;
+    width: 92px;
+    background: var(--panel2);
+    border: 2px solid transparent;
+    border-radius: 10px;
+    padding: 8px 6px;
+    cursor: pointer;
+    color: var(--text);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-align: center;
+    transition: border-color 0.15s ease, background 0.15s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    font-family: inherit;
+  }
+  .filter-btn:hover { background: #2e2743; }
+  .filter-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .filter-btn.active { border-color: var(--accent); background: #322a4d; }
+  .filter-btn .emoji { font-size: 1.6rem; line-height: 1; }
+
+  #controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    justify-content: center;
+    min-width: 240px;
+  }
+  .ctrl-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  .ctrl-row label { flex: 0 0 76px; }
+  .ctrl-row input[type="range"] {
+    flex: 1;
+    accent-color: var(--accent);
+    height: 4px;
+    cursor: pointer;
+  }
+  .ctrl-row input[type="color"] {
+    width: 32px;
+    height: 26px;
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+  }
+  .ctrl-row .val {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.7rem;
+    min-width: 60px;
+    text-align: right;
+    color: var(--text);
+  }
+  .ctrl-row .color-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    justify-content: flex-end;
+  }
+  .color-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.65rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  #capture-row { display: flex; gap: 8px; align-items: stretch; }
+  #btn-capture {
+    flex: 1;
+    background: linear-gradient(135deg, var(--accent2), #ff9a5c);
+    border: none;
+    color: #2a1204;
+    font-weight: 800;
+    padding: 13px;
+    border-radius: 12px;
+    font-size: 1rem;
+    cursor: pointer;
+    box-shadow: 0 6px 20px rgba(255,122,51,0.28), inset 0 1px 0 rgba(255,255,255,0.35);
+    transition: transform 0.1s ease, box-shadow 0.15s ease, filter 0.15s ease;
+    font-family: inherit;
+    letter-spacing: 0.3px;
+  }
+  #btn-capture:hover { filter: brightness(1.06); box-shadow: 0 8px 24px rgba(255,122,51,0.4), inset 0 1px 0 rgba(255,255,255,0.35); }
+  #btn-capture:active { transform: scale(0.98); box-shadow: 0 3px 10px rgba(255,122,51,0.35), inset 0 1px 0 rgba(255,255,255,0.35); }
+  #btn-capture:focus-visible { outline: 2px solid #ffd7bc; outline-offset: 2px; }
+  #btn-capture:disabled { opacity: 0.45; box-shadow: none; cursor: not-allowed; filter: grayscale(0.4); }
+
+  #face-status {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: rgba(0,0,0,0.55);
+    color: #fff;
+    font-size: 0.72rem;
+    padding: 4px 10px;
+    border-radius: 20px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+  #face-status .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #666;
+    transition: background 0.2s ease, box-shadow 0.2s ease;
+  }
+  #face-status.ok   .dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  #face-status.warn .dot { background: #f5b93e; }
+
+  #result-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.88);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    flex-direction: column;
+    gap: 14px;
+  }
+  #result-modal.open { display: flex; }
+  #result-modal img {
+    max-width: 92vw;
+    max-height: 72vh;
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.06);
+    object-fit: contain;
+  }
+  #result-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+
+  #toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: var(--ok);
+    color: #06210f;
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    opacity: 0;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    z-index: 200;
+    pointer-events: none;
+    max-width: 90vw;
+    text-align: center;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.err  { background: var(--danger); color: #fff; }
+
+  @media (max-width: 720px) {
+    #panel {
+      grid-template-columns: 1fr;
+      grid-template-rows: min-content auto;
+    }
+    #controls {
+      flex-direction: row;
+      flex-wrap: wrap;
+      min-width: 0;
+      justify-content: flex-start;
+    }
+    .ctrl-row { flex: 1 1 45%; }
+    #capture-row { flex: 1 1 100%; }
+    header h1 { font-size: 0.92rem; }
+    .btn { padding: 6px 10px; font-size: 0.78rem; }
+    #countdown { font-size: 6rem; }
+  }
+
+  @media (max-height: 560px) {
+    #panel { padding: 8px; }
+    #controls { gap: 6px; }
+    .ctrl-row { font-size: 0.7rem; }
+    #btn-capture { padding: 10px; font-size: 0.9rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  body.cam-on #placeholder { display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🎃 Filtros de <span>Fantasia</span></h1>
+  <div class="spacer"></div>
+  <button class="btn" id="btn-mirror" type="button" aria-pressed="true" title="Espelhar imagem" aria-label="Espelhar imagem">🔁</button>
+  <button class="btn" id="btn-timer" type="button" title="Contagem regressiva">⏱️ <span id="timer-label">off</span></button>
+  <button class="btn" id="btn-camera" type="button" title="Alternar câmera" aria-label="Alternar câmera">📷</button>
+</header>
+
+<main>
+  <div id="stage">
+    <video id="video" playsinline autoplay muted></video>
+    <canvas id="overlay"></canvas>
+
+    <div class="placeholder" id="placeholder">
+      <div class="icon" aria-hidden="true">🎃</div>
+      <p><b>Toque em "Iniciar câmera"</b> para começar.<br>
+      Funciona no notebook (Windows/macOS/Linux) e no Android.</p>
+      <button class="btn primary" id="btn-start" type="button" style="padding:12px 22px;font-size:1rem;">
+        ▶ Iniciar câmera
+      </button>
+      <input type="file" id="file-fallback" accept="image/*" capture="user" hidden>
+    </div>
+
+    <div id="face-status" role="status" aria-live="polite">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="face-status-text">Rosto: —</span>
+    </div>
+
+    <div id="countdown" aria-hidden="true">3</div>
+    <div id="flash" aria-hidden="true"></div>
+  </div>
+
+  <div id="panel">
+    <div id="filters-scroll" role="tablist" aria-label="Filtros disponíveis"></div>
+
+    <div id="controls">
+      <div class="ctrl-row">
+        <label for="intensity">Intensidade</label>
+        <input type="range" id="intensity" min="0" max="100" value="70">
+        <span class="val" id="intensity-val">70</span>
+      </div>
+      <div class="ctrl-row">
+        <label for="opacity">Opacidade</label>
+        <input type="range" id="opacity" min="10" max="100" value="90">
+        <span class="val" id="opacity-val">90</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Cores</label>
+        <div class="color-group">
+          <span class="color-chip">rosto <input type="color" id="color" value="#ff6b35" aria-label="Cor do rosto"></span>
+          <span class="color-chip">olhos <input type="color" id="color-eyes" value="#ff3a6b" aria-label="Cor dos olhos"></span>
+          <span class="color-chip">boca <input type="color" id="color-mouth" value="#b06cff" aria-label="Cor da boca"></span>
+        </div>
+      </div>
+      <div id="capture-row">
+        <button id="btn-capture" type="button" disabled>📸 Capturar</button>
+        <button class="btn" id="btn-upload" type="button" title="Enviar foto da galeria" aria-label="Enviar foto da galeria">🖼️</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div id="result-modal" role="dialog" aria-modal="true" aria-label="Resultado da captura">
+  <img id="result-img" alt="Resultado da captura">
+  <div id="result-actions">
+    <button class="btn primary" id="btn-download" type="button">⬇ Baixar PNG</button>
+    <button class="btn" id="btn-again" type="button">🔁 Tirar outra</button>
+    <button class="btn" id="btn-close-result" type="button">✖ Fechar</button>
+  </div>
+</div>
+
+<input type="file" id="file-upload" accept="image/*" hidden>
+<div id="toast" role="alert" aria-live="assertive"></div>
+
+<script type="module">
+/* =========================================================================
+   Filtros de Fantasia — Halloween
+   Pipeline:
+   - MediaPipe Face Landmarker (CDN, GPU com fallback CPU)
+   - Filtros em canvas 2D seguindo landmarks do rosto
+   - Geometria centralizada + ângulo estabilizado + rejeição de perfil
+   - Neon multi-anel com pulsação (composição 'lighter', sem shadowBlur)
+   - Cores independentes: rosto, olhos, boca
+   ========================================================================= */
+
+import { FaceLandmarker, FilesetResolver }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12";
+
+const MODEL_URL =
+  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const WASM_URL =
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/wasm";
+const CAPTURE_MAX_SIDE = 1920;
+const MIN_CAPTURE_SHORT_SIDE = 720;
+const TIMER_OPTIONS = [0, 3, 5, 10];
+const TOAST_DURATION_MS = 2400;
+const TOAST_ERROR_DURATION_MS = 4800;
+const ANGLE_SMOOTHING = 0.25;
+const FACE_COLLAPSE_RATIO = 0.35;
+
+/* ------------------------------- DOM ----------------------------------- */
+const $video        = document.getElementById('video');
+const $overlay      = document.getElementById('overlay');
+const ctx           = $overlay.getContext('2d');
+const $stage        = document.getElementById('stage');
+const $placeholder  = document.getElementById('placeholder');
+const $btnStart     = document.getElementById('btn-start');
+const $btnCamera    = document.getElementById('btn-camera');
+const $btnMirror    = document.getElementById('btn-mirror');
+const $btnTimer     = document.getElementById('btn-timer');
+const $timerLabel   = document.getElementById('timer-label');
+const $btnCapture   = document.getElementById('btn-capture');
+const $btnUpload    = document.getElementById('btn-upload');
+const $faceStatus   = document.getElementById('face-status');
+const $faceText     = document.getElementById('face-status-text');
+const $countdown    = document.getElementById('countdown');
+const $flash        = document.getElementById('flash');
+const $filtersScroll= document.getElementById('filters-scroll');
+const $intensity    = document.getElementById('intensity');
+const $intensityVal = document.getElementById('intensity-val');
+const $opacity      = document.getElementById('opacity');
+const $opacityVal   = document.getElementById('opacity-val');
+const $colorFace    = document.getElementById('color');
+const $colorEyes    = document.getElementById('color-eyes');
+const $colorMouth   = document.getElementById('color-mouth');
+const $toast        = document.getElementById('toast');
+const $resultModal  = document.getElementById('result-modal');
+const $resultImg    = document.getElementById('result-img');
+const $fileUpload   = document.getElementById('file-upload');
+const $fileFallback = document.getElementById('file-fallback');
+
+/* ------------------------------- Estado -------------------------------- */
+const state = {
+  stream: null,
+  facingMode: 'user',
+  mirror: true,
+  timer: 0,
+  filter: 'none',
+  intensity: 70,
+  opacity: 90,
+  colorFace: '#ff6b35',
+  colorEyes: '#ff3a6b',
+  colorMouth: '#b06cff',
+  landmarker: null,
+  landmarkerLoading: null,
+  lastVideoTime: -1,
+  faces: [],
+  running: false,
+  rafId: null,
+  capturing: false,
+  staticImage: null,
+  dpr: window.devicePixelRatio || 1,
+  // suavização temporal por slot de rosto
+  smoothing: {
+    angle: null,
+    width: null,
+    cx: null,
+    cy: null
+  }
+};
+
+/* ------------------------------ Utilidades ----------------------------- */
+const toastTimers = new WeakMap();
+function toast(msg, isError = false) {
+  $toast.textContent = msg;
+  $toast.classList.toggle('err', isError);
+  $toast.classList.add('show');
+  const prev = toastTimers.get($toast);
+  if (prev) clearTimeout(prev);
+  const ms = isError ? TOAST_ERROR_DURATION_MS : TOAST_DURATION_MS;
+  toastTimers.set($toast, setTimeout(() => $toast.classList.remove('show'), ms));
+}
+
+function hexToRgb(hex) {
+  let h = String(hex || '').replace('#', '').trim();
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  if (h.length !== 6 || !/^[0-9a-fA-F]{6}$/.test(h)) return { r: 255, g: 107, b: 53 };
+  const n = parseInt(h, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+function rgba(hex, a = 1) {
+  const { r, g, b } = hexToRgb(hex);
+  const alpha = Math.max(0, Math.min(1, a));
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+function mixHex(hex, target, t) {
+  const a = hexToRgb(hex);
+  const b = hexToRgb(target);
+  const k = Math.max(0, Math.min(1, t));
+  return `rgb(${Math.round(a.r + (b.r - a.r) * k)},${Math.round(a.g + (b.g - a.g) * k)},${Math.round(a.b + (b.b - a.b) * k)})`;
+}
+function dist(p1, p2) { return Math.hypot(p1.x - p2.x, p1.y - p2.y); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function smooth(prev, next, alpha) {
+  if (prev === null || !Number.isFinite(prev)) return next;
+  return prev + (next - prev) * alpha;
+}
+function angleLerp(prev, next, alpha) {
+  if (prev === null || !Number.isFinite(prev)) return next;
+  let d = next - prev;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return prev + d * alpha;
+}
+
+/* ------------------------- Geometria centralizada ---------------------- */
+function fitCover(srcW, srcH, dstW, dstH) {
+  if (!srcW || !srcH || !dstW || !dstH) {
+    return { scale: 1, dw: dstW || 1, dh: dstH || 1, dx: 0, dy: 0 };
+  }
+  const scale = Math.max(dstW / srcW, dstH / srcH);
+  const dw = srcW * scale;
+  const dh = srcH * scale;
+  return { scale, dw, dh, dx: (dstW - dw) / 2, dy: (dstH - dh) / 2 };
+}
+
+function landmarksToStage(landmarks, srcW, srcH, dstW, dstH, mirror) {
+  const fit = fitCover(srcW, srcH, dstW, dstH);
+  const out = new Array(landmarks.length);
+  for (let i = 0; i < landmarks.length; i++) {
+    const lm = landmarks[i];
+    const sx = fit.dx + lm.x * fit.dw;
+    const sy = fit.dy + lm.y * fit.dh;
+    out[i] = { x: mirror ? dstW - sx : sx, y: sy };
+  }
+  return out;
+}
+
+function toLocal(pt, fc) {
+  const dx = pt.x - fc.cx;
+  const dy = pt.y - fc.cy;
+  const c = Math.cos(-fc.ang);
+  const s = Math.sin(-fc.ang);
+  return { x: dx * c - dy * s, y: dx * s + dy * c };
+}
+
+/**
+ * Ângulo estável: média de três pares (33→263, 133→362, 70→300) ponderada
+ * por comprimento. Pares muito curtos (perfil/perda) têm peso quase nulo.
+ */
+function stableFaceAngle(p) {
+  const pairs = [
+    [p[33], p[263]],
+    [p[133], p[362]],
+    [p[70], p[300]]
+  ];
+  let sx = 0, sy = 0, wsum = 0;
+  for (const [a, b] of pairs) {
+    if (!a || !b) continue;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-3) continue;
+    const w = len;
+    sx += (dx / len) * w;
+    sy += (dy / len) * w;
+    wsum += w;
+  }
+  if (wsum < 1e-3) return 0;
+  return Math.atan2(sy, sx);
+}
+
+/**
+ * Olho: centro entre cantos externo + interno e raio derivado do comprimento.
+ * Robusto a pose lateral porque usa o par do próprio olho.
+ */
+function eyeInfo(p, a, b, c, d) {
+  if (!p[a] || !p[b]) return null;
+  const center = { x: (p[a].x + p[b].x) / 2, y: (p[a].y + p[b].y) / 2 };
+  const radius = Math.max(1, dist(p[a], p[b]) * 0.5);
+  // cantos internos reforçam a precisão do centro
+  if (p[c] && p[d]) {
+    center.x = (center.x + (p[c].x + p[d].x) / 2) / 2;
+    center.y = (center.y + (p[c].y + p[d].y) / 2) / 2;
+  }
+  return { center, radius };
+}
+
+function eyeCenters(p) {
+  const left  = eyeInfo(p, 33, 133, 159, 145);
+  const right = eyeInfo(p, 362, 263, 386, 374);
+  return { left, right };
+}
+
+/**
+ * Boca: média dos 4 pontos principais (13, 14, 61, 291) + largura.
+ */
+function mouthInfo(p) {
+  const ids = [13, 14, 61, 291];
+  let sx = 0, sy = 0, n = 0;
+  for (const i of ids) {
+    if (!p[i]) continue;
+    sx += p[i].x; sy += p[i].y; n++;
+  }
+  if (n === 0) return null;
+  const center = { x: sx / n, y: sy / n };
+  const width = (p[61] && p[291]) ? dist(p[61], p[291]) : 0;
+  const height = (p[13] && p[14]) ? dist(p[13], p[14]) : 0;
+  return { center, width, height };
+}
+
+/**
+ * Nariz: base (entre 4 e 6) tem melhor centro que a ponta bruta (1).
+ */
+function noseInfo(p) {
+  if (!p[4] || !p[6]) return p[1] ? { center: p[1] } : null;
+  return { center: { x: (p[4].x + p[6].x) / 2, y: (p[4].y + p[6].y) / 2 }, tip: p[1] || null };
+}
+
+/**
+ * Contexto por rosto. Aplica rejeição de landmarks colapsados (perfil) na
+ * largura — se 234→454 encolheu demais em relação à altura, tratamos como
+ * medida parcial e mantemos a última largura válida.
+ */
+function computeFaceContext(p, state) {
+  const cxRaw = (p[234].x + p[454].x) / 2;
+  const cyRaw = (p[10].y + p[152].y) / 2;
+  const widthRaw = dist(p[234], p[454]);
+  const height = dist(p[10], p[152]);
+
+  const collapsed = height > 0 && widthRaw < height * FACE_COLLAPSE_RATIO;
+  const s = state.smoothing;
+
+  if (!collapsed) {
+    s.width = smooth(s.width, widthRaw, 0.35);
+  }
+  if (s.width === null) s.width = widthRaw;
+
+  s.cx = smooth(s.cx, cxRaw, 0.35);
+  s.cy = smooth(s.cy, cyRaw, 0.35);
+
+  const angleRaw = stableFaceAngle(p);
+  s.angle = angleLerp(s.angle, angleRaw, ANGLE_SMOOTHING);
+
+  const fw = s.width;
+  const fh = height;
+
+  return {
+    cx: s.cx,
+    cy: s.cy,
+    fw,
+    fh,
+    ang: s.angle ?? 0,
+    eyes: eyeCenters(p),
+    mouth: mouthInfo(p),
+    nose: noseInfo(p),
+    top: p[10],
+    chin: p[152],
+    left: p[234],
+    right: p[454]
+  };
+}
+
+function withFace(c, fc, fn) {
+  c.save();
+  c.translate(fc.cx, fc.cy);
+  c.rotate(fc.ang);
+  try { fn(); } finally { c.restore(); }
+}
+
+/* -------------------------- Filtros disponíveis ------------------------ */
+const FILTERS = [
+  { id: 'none',     name: 'Sem filtro',  emoji: '🚫' },
+  { id: 'pumpkin',  name: 'Abóbora',     emoji: '🎃' },
+  { id: 'skull',    name: 'Caveira',     emoji: '💀' },
+  { id: 'vampire',  name: 'Vampiro',     emoji: '🧛' },
+  { id: 'witch',    name: 'Bruxa',       emoji: '🧙' },
+  { id: 'zombie',   name: 'Zumbi',       emoji: '🧟' },
+  { id: 'cat',      name: 'Gato',        emoji: '🐱' },
+  { id: 'clown',    name: 'Palhaço',     emoji: '🤡' },
+  { id: 'ghost',    name: 'Fantasma',    emoji: '👻' },
+  { id: 'devil',    name: 'Diabo',       emoji: '😈' },
+  { id: 'skeleton', name: 'Esqueleto',   emoji: '☠️' },
+  { id: 'glow',     name: 'Olhos Glow',  emoji: '✨' },
+  { id: 'neon',     name: 'Neon',        emoji: '🌈' }
+];
+
+function buildFilterButtons() {
+  const frag = document.createDocumentFragment();
+  for (const f of FILTERS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'filter-btn' + (f.id === state.filter ? ' active' : '');
+    b.dataset.id = f.id;
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', f.id === state.filter ? 'true' : 'false');
+    b.innerHTML = `<span class="emoji" aria-hidden="true">${f.emoji}</span><span>${f.name}</span>`;
+    b.addEventListener('click', () => selectFilter(f.id));
+    frag.appendChild(b);
+  }
+  $filtersScroll.appendChild(frag);
+}
+function selectFilter(id) {
+  state.filter = id;
+  for (const b of $filtersScroll.querySelectorAll('.filter-btn')) {
+    const on = b.dataset.id === id;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  }
+}
+buildFilterButtons();
+
+/* ------------------------------ Controles ------------------------------ */
+$intensity.addEventListener('input', () => {
+  state.intensity = Number($intensity.value) || 0;
+  $intensityVal.textContent = String(state.intensity);
+});
+$opacity.addEventListener('input', () => {
+  state.opacity = Number($opacity.value) || 0;
+  $opacityVal.textContent = String(state.opacity);
+});
+$colorFace.addEventListener('input', () => { state.colorFace = $colorFace.value; });
+$colorEyes.addEventListener('input', () => { state.colorEyes = $colorEyes.value; });
+$colorMouth.addEventListener('input', () => { state.colorMouth = $colorMouth.value; });
+
+$btnMirror.addEventListener('click', () => {
+  state.mirror = !state.mirror;
+  document.body.classList.toggle('no-mirror', !state.mirror);
+  $btnMirror.setAttribute('aria-pressed', state.mirror ? 'true' : 'false');
+  if (state.staticImage) renderStaticImage(state.staticImage);
+});
+
+$btnTimer.addEventListener('click', () => {
+  const idx = TIMER_OPTIONS.indexOf(state.timer);
+  const next = TIMER_OPTIONS[(idx + 1) % TIMER_OPTIONS.length];
+  state.timer = next;
+  $timerLabel.textContent = next === 0 ? 'off' : next + 's';
+  toast(next === 0 ? 'Timer desligado' : `Timer: ${next}s`);
+});
+
+/* -------------------------- Inicialização modelo ----------------------- */
+async function initLandmarker() {
+  if (state.landmarker) return state.landmarker;
+  if (state.landmarkerLoading) return state.landmarkerLoading;
+
+  state.landmarkerLoading = (async () => {
+    try {
+      const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
+      const landmarker = await FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
+        runningMode: 'VIDEO',
+        numFaces: 1,
+        outputFaceBlendshapes: false,
+        outputFacialTransformationMatrixes: false
+      });
+      state.landmarker = landmarker;
+      toast('Modelo de rosto carregado ✅');
+      return landmarker;
+    } catch (err) {
+      console.warn('[initLandmarker] fallback CPU', err);
+      try {
+        const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
+        const landmarker = await FaceLandmarker.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' },
+          runningMode: 'VIDEO',
+          numFaces: 1
+        });
+        state.landmarker = landmarker;
+        toast('Modelo carregado (modo CPU) ✅');
+        return landmarker;
+      } catch (err2) {
+        console.error('[initLandmarker] falha definitiva', err2);
+        toast('Falha ao carregar modelo — verifique a conexão', true);
+        throw err2;
+      }
+    } finally {
+      state.landmarkerLoading = null;
+    }
+  })();
+
+  return state.landmarkerLoading;
+}
+
+/* ------------------------------- Câmera -------------------------------- */
+async function startCamera(facing = state.facingMode) {
+  stopCamera();
+  state.facingMode = facing;
+  state.staticImage = null;
+  $placeholder.style.display = '';
+  document.body.classList.remove('cam-on');
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    toast('Este navegador não expõe câmera. Envie uma foto.', true);
+    $fileFallback.click();
+    return;
+  }
+
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false
+    });
+  } catch (err) {
+    console.warn('[startCamera] getUserMedia falhou', err);
+    if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
+      toast('Permissão de câmera negada. Libere no navegador ou envie uma foto.', true);
+    } else {
+      toast('Não foi possível abrir a câmera. Tente enviar uma foto.', true);
+    }
+    $fileFallback.click();
+    return;
+  }
+
+  state.stream = stream;
+  $video.srcObject = stream;
+
+  try {
+    await $video.play();
+  } catch (err) {
+    console.warn('[startCamera] play falhou', err);
+    toast('Não foi possível iniciar a prévia.', true);
+    stopCamera();
+    return;
+  }
+
+  try { await initLandmarker(); }
+  catch { stopCamera(); return; }
+
+  document.body.classList.add('cam-on');
+  $btnCapture.disabled = false;
+
+  resizeCanvas();
+  resetSmoothing();
+  state.running = true;
+  state.lastVideoTime = -1;
+  loopDetect();
+  toast('Câmera ativa 📷');
+}
+
+function resetSmoothing() {
+  state.smoothing.angle = null;
+  state.smoothing.width = null;
+  state.smoothing.cx = null;
+  state.smoothing.cy = null;
+}
+
+function stopCamera() {
+  state.running = false;
+  if (state.rafId) cancelAnimationFrame(state.rafId);
+  state.rafId = null;
+  if (state.stream) {
+    for (const track of state.stream.getTracks()) track.stop();
+    state.stream = null;
+  }
+  $video.srcObject = null;
+  state.faces = [];
+  state.lastVideoTime = -1;
+  ctx.clearRect(0, 0, $overlay.width, $overlay.height);
+  $btnCapture.disabled = true;
+  document.body.classList.remove('cam-on');
+  resetSmoothing();
+}
+
+$btnStart.addEventListener('click', () => startCamera());
+$btnCamera.addEventListener('click', () => {
+  const next = state.facingMode === 'user' ? 'environment' : 'user';
+  $fileFallback.setAttribute('capture', next);
+  startCamera(next);
+});
+
+/* --------------------------- Fallback por arquivo ---------------------- */
+async function loadImageFile(file) {
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.decoding = 'async';
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('Falha ao decodificar imagem'));
+      img.src = url;
+    });
+
+    stopCamera();
+    state.staticImage = img;
+    document.body.classList.add('cam-on');
+    $placeholder.style.display = 'none';
+    $btnCapture.disabled = false;
+
+    try { await initLandmarker(); }
+    catch { return; }
+
+    resizeCanvas();
+    resetSmoothing();
+    renderStaticImage(img);
+    toast('Foto carregada. Aplique o filtro e capture.');
+  } catch (err) {
+    console.error('[loadImageFile]', err);
+    toast('Não foi possível ler esta imagem.', true);
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 500);
+  }
+}
+
+$fileFallback.addEventListener('change', (e) => {
+  const f = e.target.files?.[0];
+  e.target.value = '';
+  loadImageFile(f);
+});
+$btnUpload.addEventListener('click', () => $fileUpload.click());
+$fileUpload.addEventListener('change', (e) => {
+  const f = e.target.files?.[0];
+  e.target.value = '';
+  loadImageFile(f);
+});
+
+/* ------------------------------- Resize -------------------------------- */
+function resizeCanvas() {
+  const rect = $stage.getBoundingClientRect();
+  const cssW = Math.max(1, Math.round(rect.width));
+  const cssH = Math.max(1, Math.round(rect.height));
+  state.dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+
+  $overlay.width  = Math.round(cssW * state.dpr);
+  $overlay.height = Math.round(cssH * state.dpr);
+  $overlay.style.width  = cssW + 'px';
+  $overlay.style.height = cssH + 'px';
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(state.dpr, state.dpr);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+}
+
+let resizeScheduled = false;
+function scheduleResize() {
+  if (resizeScheduled) return;
+  resizeScheduled = true;
+  requestAnimationFrame(() => {
+    resizeScheduled = false;
+    resizeCanvas();
+    if (state.staticImage) renderStaticImage(state.staticImage);
+  });
+}
+window.addEventListener('resize', scheduleResize);
+window.addEventListener('orientationchange', scheduleResize);
+
+/* --------------------------- Loop de detecção ------------------------- */
+function loopDetect() {
+  if (!state.running) return;
+  const now = performance.now();
+  if (state.landmarker && $video.readyState >= 2 && $video.currentTime !== state.lastVideoTime) {
+    state.lastVideoTime = $video.currentTime;
+    try {
+      const res = state.landmarker.detectForVideo($video, now);
+      state.faces = res.faceLandmarks || [];
+    } catch (err) {
+      if (!(err && err.name === 'InvalidStateError')) {
+        console.warn('[loopDetect] detect falhou', err);
+      }
+    }
+  }
+  updateFaceStatus();
+  drawPreview();
+  state.rafId = requestAnimationFrame(loopDetect);
+}
+
+function updateFaceStatus() {
+  const has = state.faces.length > 0;
+  $faceStatus.classList.toggle('ok', has);
+  $faceStatus.classList.toggle('warn', !has && state.running);
+  $faceText.textContent = has
+    ? 'Rosto detectado ✅'
+    : (state.running ? 'Procure um rosto…' : 'Rosto: —');
+}
+
+function drawPreview() {
+  const rect = $stage.getBoundingClientRect();
+  const W = rect.width, H = rect.height;
+  ctx.clearRect(0, 0, W, H);
+  if (state.faces.length === 0) return;
+  const srcW = $video.videoWidth, srcH = $video.videoHeight;
+  if (!srcW || !srcH) return;
+
+  for (const face of state.faces) {
+    const pts = landmarksToStage(face, srcW, srcH, W, H, state.mirror);
+    drawFilter(ctx, pts, W, H, state);
+  }
+}
+
+function renderStaticImage(img) {
+  resizeCanvas();
+  const rect = $stage.getBoundingClientRect();
+  const W = rect.width, H = rect.height;
+
+  ctx.clearRect(0, 0, W, H);
+  const fit = fitCover(img.width, img.height, W, H);
+  ctx.save();
+  if (state.mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(img, fit.dx, fit.dy, fit.dw, fit.dh);
+  ctx.restore();
+
+  if (!state.landmarker) return;
+
+  try {
+    const res = state.landmarker.detect(img);
+    state.faces = res.faceLandmarks || [];
+  } catch (err) {
+    console.warn('[renderStaticImage] detect falhou', err);
+    state.faces = [];
+  }
+  updateFaceStatus();
+
+  for (const face of state.faces) {
+    const pts = landmarksToStage(face, img.width, img.height, W, H, state.mirror);
+    drawFilter(ctx, pts, W, H, state);
+  }
+}
+
+/* =========================================================================
+   FILTROS
+   ========================================================================= */
+function drawFilter(c, p, W, H, st) {
+  if (st.filter === 'none') return;
+  if (!p || p.length < 468) return;
+
+  const I = Math.max(0, Math.min(1, st.intensity / 100));
+  const A = Math.max(0, Math.min(1, st.opacity / 100));
+  const fc = computeFaceContext(p, st);
+
+  const colors = {
+    face: st.colorFace || '#ff6b35',
+    eyes: st.colorEyes || mixHex(st.colorFace || '#ff6b35', '#ff3a6b', 0.5),
+    mouth: st.colorMouth || mixHex(st.colorFace || '#ff6b35', '#b06cff', 0.5)
+  };
+
+  c.save();
+  c.globalAlpha = A;
+  c.lineJoin = 'round';
+  c.lineCap = 'round';
+
+  switch (st.filter) {
+    case 'pumpkin':    drawPumpkin(c, fc, colors, I);    break;
+    case 'skull':      drawSkull(c, fc, colors, I);      break;
+    case 'vampire':    drawVampire(c, fc, colors, I);    break;
+    case 'witch':      drawWitch(c, fc, colors, I);      break;
+    case 'zombie':     drawZombie(c, fc, colors, I);     break;
+    case 'cat':        drawCat(c, fc, colors, I);        break;
+    case 'clown':      drawClown(c, fc, colors, I);      break;
+    case 'ghost':      drawGhost(c, fc, colors, I);      break;
+    case 'devil':      drawDevil(c, fc, colors, I);      break;
+    case 'skeleton':   drawSkeleton(c, fc, colors, I);   break;
+    case 'glow':       drawGlow(c, fc, colors, I);       break;
+    case 'neon':       drawNeon(c, fc, colors, I);       break;
+  }
+  c.restore();
+}
+
+/* ------------------------------ Abóbora -------------------------------- */
+function drawPumpkin(c, fc, colors, I) {
+  const rx = fc.fw * 0.62;
+  const ry = fc.fh * 0.62;
+
+  withFace(c, fc, () => {
+    const grd = c.createRadialGradient(0, 0, rx * 0.2, 0, 0, rx);
+    grd.addColorStop(0, mixHex(colors.face, '#ffb066', 0.5));
+    grd.addColorStop(1, mixHex(colors.face, '#5a1d00', 0.45));
+    c.fillStyle = grd;
+    c.globalAlpha *= 0.55 * I;
+    c.beginPath();
+    c.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    c.fill();
+
+    c.globalAlpha = I;
+    c.strokeStyle = 'rgba(120,40,0,0.6)';
+    c.lineWidth = Math.max(2, rx * 0.03);
+    for (let k = -2; k <= 2; k++) {
+      c.beginPath();
+      c.ellipse(0, 0, rx * (0.25 + Math.abs(k) * 0.18), ry, 0, 0, Math.PI * 2);
+      c.stroke();
+    }
+
+    c.fillStyle = '#1a0a00';
+    const eyeR = (fc.eyes.left?.radius || rx * 0.14) * 1.35;
+    for (const e of [fc.eyes.left, fc.eyes.right]) {
+      if (!e) continue;
+      const ep = toLocal(e.center, fc);
+      const rr = Math.max(eyeR, e.radius * 1.3);
+      c.beginPath();
+      c.moveTo(ep.x - rr, ep.y - rr * 0.7);
+      c.lineTo(ep.x + rr, ep.y - rr * 0.7);
+      c.lineTo(ep.x, ep.y + rr * 0.7);
+      c.closePath();
+      c.fill();
+    }
+
+    if (fc.mouth) {
+      const mp = toLocal(fc.mouth.center, fc);
+      const mouthW = Math.max(fc.mouth.width * 1.15, rx * 0.5);
+      const mouthH = Math.max(fc.mouth.height * 1.4, ry * 0.22);
+      c.beginPath();
+      c.moveTo(mp.x - mouthW / 2, mp.y - mouthH * 0.15);
+      c.lineTo(mp.x - mouthW * 0.28, mp.y + mouthH * 0.35);
+      c.lineTo(mp.x - mouthW * 0.10, mp.y - mouthH * 0.10);
+      c.lineTo(mp.x + mouthW * 0.05, mp.y + mouthH * 0.45);
+      c.lineTo(mp.x + mouthW * 0.20, mp.y - mouthH * 0.10);
+      c.lineTo(mp.x + mouthW * 0.35, mp.y + mouthH * 0.30);
+      c.lineTo(mp.x + mouthW / 2, mp.y - mouthH * 0.15);
+      c.lineTo(mp.x + mouthW / 2, mp.y + mouthH * 0.55);
+      c.lineTo(mp.x - mouthW / 2, mp.y + mouthH * 0.55);
+      c.closePath();
+      c.fill();
+    }
+
+    c.fillStyle = '#2e7d32';
+    c.beginPath();
+    c.ellipse(0, -ry * 0.95, rx * 0.08, ry * 0.12, 0, 0, Math.PI * 2);
+    c.fill();
+  });
+}
+
+/* ------------------------------ Caveira -------------------------------- */
+function drawSkull(c, fc, colors, I) {
+  withFace(c, fc, () => {
+    c.globalAlpha = 0.82 * I;
+
+    for (const e of [fc.eyes.left, fc.eyes.right]) {
+      if (!e) continue;
+      const ep = toLocal(e.center, fc);
+      const rx = e.radius * 1.35;
+      const ry = e.radius * 1.05;
+
+      c.fillStyle = 'rgba(0,0,0,0.9)';
+      c.beginPath();
+      c.ellipse(ep.x, ep.y, rx, ry, 0, 0, Math.PI * 2);
+      c.fill();
+
+      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, rx);
+      g.addColorStop(0, rgba(colors.eyes, 0.95));
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = g;
+      c.beginPath();
+      c.ellipse(ep.x, ep.y, rx, ry, 0, 0, Math.PI * 2);
+      c.fill();
+    }
+
+    if (fc.nose) {
+      const np = toLocal(fc.nose.center, fc);
+      c.fillStyle = 'rgba(0,0,0,0.85)';
+      c.beginPath();
+      c.moveTo(np.x, np.y - fc.fh * 0.04);
+      c.lineTo(np.x - fc.fw * 0.05, np.y + fc.fh * 0.06);
+      c.lineTo(np.x + fc.fw * 0.05, np.y + fc.fh * 0.06);
+      c.closePath();
+      c.fill();
+    }
+
+    if (fc.mouth) {
+      const mp = toLocal(fc.mouth.center, fc);
+      const tw = Math.max(fc.fw * 0.42, fc.mouth.width * 1.2);
+      const th = Math.max(fc.fh * 0.13, fc.mouth.height * 1.4);
+      c.strokeStyle = 'rgba(0,0,0,0.9)';
+      c.lineWidth = Math.max(2, fc.fw * 0.02);
+      c.strokeRect(mp.x - tw / 2, mp.y - th / 2, tw, th);
+      for (let i = 1; i < 5; i++) {
+        const x = mp.x - tw / 2 + (tw / 5) * i;
+        c.beginPath(); c.moveTo(x, mp.y - th / 2); c.lineTo(x, mp.y + th / 2); c.stroke();
+      }
+      c.beginPath(); c.moveTo(mp.x - tw / 2, mp.y); c.lineTo(mp.x + tw / 2, mp.y); c.stroke();
+    }
+  });
+}
+
+/* ------------------------------ Vampiro -------------------------------- */
+function drawVampire(c, fc, colors, I) {
+  withFace(c, fc, () => {
+    c.globalAlpha = I;
+
+    if (fc.mouth) {
+      const mp = toLocal(fc.mouth.center, fc);
+      const fangLen = Math.max(fc.mouth.height * 1.6, fc.fh * 0.09);
+      const mouthW = Math.max(fc.mouth.width, fc.fw * 0.22);
+
+      c.fillStyle = '#fff';
+      c.strokeStyle = 'rgba(0,0,0,0.35)';
+      c.lineWidth = 1;
+      for (const sign of [-1, 1]) {
+        const baseX = mp.x + sign * mouthW * 0.35;
+        const baseY = mp.y + fc.fh * 0.02;
+        c.beginPath();
+        c.moveTo(baseX - fc.fw * 0.02, baseY);
+        c.lineTo(baseX + fc.fw * 0.02, baseY);
+        c.lineTo(baseX, baseY + fangLen);
+        c.closePath();
+        c.fill();
+        c.stroke();
+      }
+
+      c.fillStyle = rgba(colors.mouth, 0.9);
+      const dripX = mp.x + fc.fw * 0.08;
+      c.beginPath();
+      c.moveTo(dripX, mp.y + fc.fh * 0.05);
+      c.quadraticCurveTo(dripX + fc.fw * 0.03, mp.y + fc.fh * 0.15, dripX, mp.y + fc.fh * 0.22);
+      c.quadraticCurveTo(dripX - fc.fw * 0.03, mp.y + fc.fh * 0.15, dripX, mp.y + fc.fh * 0.05);
+      c.fill();
+    }
+
+    for (const e of [fc.eyes.left, fc.eyes.right]) {
+      if (!e) continue;
+      const ep = toLocal(e.center, fc);
+      const rr = Math.max(e.radius * 1.4, fc.fw * 0.06);
+      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, rr);
+      g.addColorStop(0, rgba(colors.eyes, 1));
+      g.addColorStop(1, rgba(colors.eyes, 0));
+      c.fillStyle = g;
+      c.beginPath();
+      c.arc(ep.x, ep.y, rr, 0, Math.PI * 2);
+      c.fill();
+    }
+
+    c.globalAlpha = 0.15 * I;
+    c.fillStyle = mixHex(colors.face, '#e8e0f0', 0.6);
+    c.beginPath();
+    c.ellipse(0, 0, fc.fw * 0.55, fc.fh * 0.55, 0, 0, Math.PI * 2);
+    c.fill();
+  });
+}
+
+/* -------------------------------- Bruxa -------------------------------- */
+/**
+ * Chapéu ancorado no centro do rosto, deslocado em eixo local para cima.
+ * Escala em `fw` (largura estável) e não em `top` bruto — elimina o tombo.
+ */
+function drawWitch(c, fc, colors, I) {
+  const hatW = fc.fw * 1.05;
+  const hatH = fc.fh * 1.05;
+  const baseY = -fc.fh * 0.55;  // topo do crânio em eixo local
+
+  withFace(c, fc, () => {
+    c.globalAlpha = I;
+
+    // aba (leve curvatura pra cima nas pontas)
+    c.fillStyle = '#150a24';
+    c.beginPath();
+    c.ellipse(0, baseY, hatW * 0.75, fc.fh * 0.12, 0, 0, Math.PI * 2);
+    c.fill();
+
+    // aba superior (dá profundidade)
+    c.fillStyle = '#241040';
+    c.beginPath();
+    c.ellipse(0, baseY - fc.fh * 0.015, hatW * 0.72, fc.fh * 0.10, 0, 0, Math.PI * 2);
+    c.fill();
+
+    // cone com leve inclinação lateral
+    const tilt = hatW * 0.06;
+    const grad = c.createLinearGradient(-hatW * 0.3, baseY, hatW * 0.3, baseY - hatH);
+    grad.addColorStop(0, '#2a1050');
+    grad.addColorStop(1, '#0a0420');
+    c.fillStyle = grad;
+    c.beginPath();
+    c.moveTo(-hatW * 0.32, baseY);
+    c.quadraticCurveTo(-hatW * 0.18, baseY - hatH * 0.55, tilt, baseY - hatH);
+    c.quadraticCurveTo(-hatW * 0.02, baseY - hatH * 0.55, hatW * 0.32, baseY);
+    c.closePath();
+    c.fill();
+
+    // fivela com a cor do usuário
+    const buckleW = hatW * 0.26;
+    const buckleH = hatH * 0.13;
+    const buckleY = baseY - hatH * 0.10;
+    c.fillStyle = rgba(colors.face, 0.98);
+    c.fillRect(-buckleW / 2, buckleY - buckleH / 2, buckleW, buckleH);
+    c.fillStyle = '#0a0420';
+    c.fillRect(-buckleW * 0.32, buckleY - buckleH * 0.22, buckleW * 0.64, buckleH * 0.44);
+  });
+}
+
+/* -------------------------------- Zumbi -------------------------------- */
+function drawZombie(c, fc, colors, I) {
+  withFace(c, fc, () => {
+    c.globalAlpha = I;
+
+    const skin = mixHex(colors.face, '#7acc4a', 0.65);
+    const g = c.createRadialGradient(0, 0, fc.fw * 0.1, 0, 0, fc.fw * 0.6);
+    g.addColorStop(0, skin);
+    g.addColorStop(0.7, rgba(colors.face, 0.35));
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = g;
+    c.beginPath();
+    c.ellipse(0, 0, fc.fw * 0.55, fc.fh * 0.55, 0, 0, Math.PI * 2);
+    c.fill();
+
+    for (const e of [fc.eyes.left, fc.eyes.right]) {
+      if (!e) continue;
+      const ep = toLocal(e.center, fc);
+      const r1 = Math.max(e.radius * 0.9, fc.fw * 0.035);
+      c.fillStyle = 'rgba(255,220,0,0.95)';
+      c.beginPath();
+      c.arc(ep.x, ep.y, r1, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = rgba(colors.eyes, 0.95);
+      c.beginPath();
+      c.arc(ep.x, ep.y, r1 * 0.45, 0, Math.PI * 2);
+      c.fill();
+    }
+
+    if (fc.mouth) {
+      const mp = toLocal(fc.mouth.center, fc);
+      const mw = Math.max(fc.mouth.width, fc.fw * 0.35) * 0.9;
+      const mh = Math.max(fc.mouth.height * 1.6, fc.fh * 0.06);
+      c.strokeStyle = 'rgba(60,20,10,0.9)';
+      c.lineWidth = Math.max(2, fc.fw * 0.015);
+      c.beginPath();
+      c.moveTo(mp.x - mw, mp.y);
+      c.lineTo(mp.x + mw, mp.y);
+      c.stroke();
+      for (let i = -3; i <= 3; i++) {
+        const x = mp.x + (mw / 3) * i * 0.9;
+        c.beginPath();
+        c.moveTo(x, mp.y - mh);
+        c.lineTo(x, mp.y + mh);
+        c.stroke();
+      }
+      c.fillStyle = rgba(colors.mouth, 0.85);
+      c.beginPath();
+      c.ellipse(mp.x + mw * 0.85, mp.y + mh * 0.6, fc.fw * 0.04, fc.fh * 0.05, 0, 0, Math.PI * 2);
+      c.fill();
+    }
+  });
+}
+
+/* --------------------------------- Gato -------------------------------- */
+/**
+ * Orelhas ancoradas nos trágus (234/454) — posicionam melhor que o topo da
+ * testa, especialmente em perfis.
+ */
+function drawCat(c, fc, colors, I) {
+  const inner = mixHex(colors.face, '#ffffff', 0.55);
+
+  withFace(c, fc, () => {
+    c.globalAlpha = I;
+
+    // topo efetivo: linha por cima das sobrancelhas
+    const earY = -fc.fh * 0.35;
+    const leftX = -fc.fw * 0.48;
+    const rightX = fc.fw * 0.48;
+
+    for (const side of [-1, 1]) {
+      const bx = side > 0 ? rightX : leftX;
+      c.fillStyle = colors.face;
+      c.beginPath();
+      c.moveTo(bx * 0.75, earY + fc.fh * 0.10);
+      c.lineTo(bx, earY - fc.fh * 0.30);
+      c.lineTo(bx * 0.35, earY - fc.fh * 0.06);
+      c.closePath();
+      c.fill();
+
+      c.fillStyle = inner;
+      c.beginPath();
+      c.moveTo(bx * 0.72, earY + fc.fh * 0.06);
+      c.lineTo(bx * 0.92, earY - fc.fh * 0.22);
+      c.lineTo(bx * 0.42, earY - fc.fh * 0.04);
+      c.closePath();
+      c.fill();
+    }
+
+    if (fc.mouth) {
+      const mp = toLocal(fc.mouth.center, fc);
+      c.strokeStyle = 'rgba(255,255,255,0.9)';
+      c.lineWidth = Math.max(1.5, fc.fw * 0.012);
+      for (const side of [-1, 1]) {
+        for (let k = 0; k < 3; k++) {
+          c.beginPath();
+          c.moveTo(mp.x + side * fc.fw * 0.15, mp.y - fc.fh * 0.02 + k * fc.fh * 0.03);
+          c.lineTo(mp.x + side * fc.fw * 0.55, mp.y - fc.fh * 0.05 + k * fc.fh * 0.06);
+          c.stroke();
+        }
+      }
+      c.fillStyle = mixHex(colors.mouth, '#ff7aa0', 0.4);
+      c.beginPath();
+      c.moveTo(mp.x - fc.fw * 0.03, mp.y - fc.fh * 0.06);
+      c.lineTo(mp.x + fc.fw * 0.03, mp.y - fc.fh * 0.06);
+      c.lineTo(mp.x, mp.y - fc.fh * 0.02);
+      c.closePath();
+      c.fill();
+    }
+  });
+}
+
+/* ------------------------------- Palhaço ------------------------------- */
+function drawClown(c, fc, colors, I) {
+  withFace(c, fc, () => {
+    c.globalAlpha = I;
+
+    if (fc.nose) {
+      const np = toLocal(fc.nose.center, fc);
+      const rr = Math.max(fc.fw * 0.09, (fc.eyes.left?.radius || fc.fw * 0.06) * 1.2);
+      c.fillStyle = rgba(colors.face, 1);
+      c.beginPath();
+      c.arc(np.x, np.y, rr, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = 'rgba(255,255,255,0.6)';
+      c.beginPath();
+      c.arc(np.x - rr * 0.35, np.y - rr * 0.35, rr * 0.35, 0, Math.PI * 2);
+      c.fill();
+    }
+
+    c.fillStyle = rgba(colors.face, 0.8);
+    for (const side of [-1, 1]) {
+      c.beginPath();
+      c.arc(side * fc.fw * 0.32, fc.fh * 0.12, fc.fw * 0.10, 0, Math.PI * 2);
+      c.fill();
+    }
+
+    if (fc.mouth) {
+      const mp = toLocal(fc.mouth.center, fc);
+      const sw = Math.max(fc.mouth.width * 1.2, fc.fw * 0.6);
+      c.strokeStyle = rgba(colors.mouth, 0.95);
+      c.lineWidth = Math.max(3, fc.fw * 0.03);
+      c.beginPath();
+      c.moveTo(mp.x - sw / 2, mp.y - fc.fh * 0.02);
+      c.quadraticCurveTo(mp.x, mp.y + fc.fh * 0.20, mp.x + sw / 2, mp.y - fc.fh * 0.02);
+      c.stroke();
+    }
+
+    for (const e of [fc.eyes.left, fc.eyes.right]) {
+      if (!e) continue;
+      const ep = toLocal(e.center, fc);
+      c.fillStyle = 'rgba(20,20,20,0.9)';
+      c.beginPath();
+      c.ellipse(ep.x, ep.y - fc.fh * 0.04, e.radius * 1.1, e.radius * 0.6, 0, 0, Math.PI * 2);
+      c.fill();
+    }
+  });
+}
+
+/* ------------------------------ Fantasma ------------------------------- */
+function drawGhost(c, fc, colors, I) {
+  withFace(c, fc, () => {
+    c.globalAlpha = 0.35 * I;
+    c.fillStyle = mixHex(colors.face, '#e8f0ff', 0.7);
+    c.beginPath();
+    c.ellipse(0, -fc.fh * 0.05, fc.fw * 0.55, fc.fh * 0.60, 0, 0, Math.PI * 2);
+    c.fill();
+
+    c.globalAlpha = 0.9 * I;
+    c.fillStyle = 'rgba(20,20,40,0.9)';
+    for (const e of [fc.eyes.left, fc.eyes.right]) {
+      if (!e) continue;
+      const ep = toLocal(e.center, fc);
+      c.beginPath();
+      c.ellipse(ep.x, ep.y, e.radius * 1.2, e.radius * 0.9, 0, 0, Math.PI * 2);
+      c.fill();
+    }
+
+    const g = c.createRadialGradient(0, 0, fc.fw * 0.2, 0, 0, fc.fw * 0.7);
+    g.addColorStop(0, rgba(colors.face, 0.25));
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = g;
+    c.beginPath();
+    c.ellipse(0, 0, fc.fw * 0.7, fc.fh * 0.7, 0, 0, Math.PI * 2);
+    c.fill();
+  });
+}
+
+/* -------------------------------- Diabo -------------------------------- */
+function drawDevil(c, fc, colors, I) {
+  withFace(c, fc, () => {
+    c.globalAlpha = I;
+    const baseY = -fc.fh * 0.28;
+
+    c.fillStyle = rgba(colors.face, 1);
+    c.strokeStyle = 'rgba(60,0,0,0.7)';
+    c.lineWidth = Math.max(1.5, fc.fw * 0.012);
+    for (const side of [-1, 1]) {
+      c.beginPath();
+      c.moveTo(side * fc.fw * 0.22, baseY);
+      c.quadraticCurveTo(side * fc.fw * 0.42, baseY - fc.fh * 0.22, side * fc.fw * 0.30, baseY - fc.fh * 0.35);
+      c.quadraticCurveTo(side * fc.fw * 0.16, baseY - fc.fh * 0.15, side * fc.fw * 0.10, baseY + fc.fh * 0.02);
+      c.closePath();
+      c.fill();
+      c.stroke();
+    }
+
+    for (const e of [fc.eyes.left, fc.eyes.right]) {
+      if (!e) continue;
+      const ep = toLocal(e.center, fc);
+      const rr = Math.max(e.radius * 1.4, fc.fw * 0.06);
+      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, rr);
+      g.addColorStop(0, rgba(colors.eyes, 1));
+      g.addColorStop(1, rgba(colors.eyes, 0.1));
+      c.fillStyle = g;
+      c.beginPath();
+      c.arc(ep.x, ep.y, rr, 0, Math.PI * 2);
+      c.fill();
+    }
+  });
+}
+
+/* ------------------------------ Esqueleto ------------------------------ */
+function drawSkeleton(c, fc, colors, I) {
+  withFace(c, fc, () => {
+    c.globalAlpha = 0.55 * I;
+    c.fillStyle = mixHex(colors.face, '#f0ead8', 0.85);
+    c.beginPath();
+    c.ellipse(0, 0, fc.fw * 0.55, fc.fh * 0.55, 0, 0, Math.PI * 2);
+    c.fill();
+
+    c.globalAlpha = I;
+    c.fillStyle = '#0a0a0a';
+    for (const e of [fc.eyes.left, fc.eyes.right]) {
+      if (!e) continue;
+      const ep = toLocal(e.center, fc);
+      c.beginPath();
+      c.ellipse(ep.x, ep.y, e.radius * 1.25, e.radius * 0.95, 0, 0, Math.PI * 2);
+      c.fill();
+    }
+
+    if (fc.nose) {
+      const np = toLocal(fc.nose.center, fc);
+      c.beginPath();
+      c.moveTo(np.x, np.y - fc.fh * 0.05);
+      c.lineTo(np.x - fc.fw * 0.05, np.y + fc.fh * 0.06);
+      c.lineTo(np.x + fc.fw * 0.05, np.y + fc.fh * 0.06);
+      c.closePath();
+      c.fill();
+    }
+
+    if (fc.mouth) {
+      const mp = toLocal(fc.mouth.center, fc);
+      const tw = Math.max(fc.fw * 0.45, fc.mouth.width * 1.2);
+      const th = Math.max(fc.fh * 0.15, fc.mouth.height * 1.4);
+      c.fillStyle = mixHex(colors.face, '#f0ead8', 0.85);
+      c.strokeStyle = '#222';
+      c.lineWidth = Math.max(2, fc.fw * 0.02);
+      c.fillRect(mp.x - tw / 2, mp.y - th / 2, tw, th);
+      c.strokeRect(mp.x - tw / 2, mp.y - th / 2, tw, th);
+      for (let i = 1; i < 6; i++) {
+        const x = mp.x - tw / 2 + (tw / 6) * i;
+        c.beginPath(); c.moveTo(x, mp.y - th / 2); c.lineTo(x, mp.y + th / 2); c.stroke();
+      }
+    }
+  });
+}
+
+/* ------------------------------ Olhos Glow ----------------------------- */
+function drawGlow(c, fc, colors, I) {
+  withFace(c, fc, () => {
+    c.globalAlpha = I;
+    for (const e of [fc.eyes.left, fc.eyes.right]) {
+      if (!e) continue;
+      const ep = toLocal(e.center, fc);
+      const rr = e.radius * 2.2;
+      const g = c.createRadialGradient(ep.x, ep.y, 1, ep.x, ep.y, rr);
+      g.addColorStop(0, rgba(colors.eyes, 1));
+      g.addColorStop(0.5, rgba(colors.eyes, 0.5));
+      g.addColorStop(1, rgba(colors.eyes, 0));
+      c.fillStyle = g;
+      c.beginPath();
+      c.arc(ep.x, ep.y, rr, 0, Math.PI * 2);
+      c.fill();
+    }
+  });
+}
+
+/* --------------------------------- Neon -------------------------------- */
+/**
+ * Multi-anel com pulsação. Usa composição 'lighter' em 4 passadas
+ * (núcleo branco, cor pura, cor média, cor fraca) sem shadowBlur.
+ * Anéis: face (FACE_OVAL), olhos, boca, sobrancelhas.
+ */
+const FACE_OVAL = [
+  10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+  397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
+  172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109
+];
+const EYE_LEFT_LOOP  = [33, 133, 159, 145, 153, 154, 155, 33];
+const EYE_RIGHT_LOOP = [263, 362, 386, 374, 380, 381, 382, 263];
+const MOUTH_OUTER    = [
+  61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185
+];
+const BROW_LEFT  = [46, 53, 52, 65, 55, 70, 63, 105, 66, 107];
+const BROW_RIGHT = [276, 283, 282, 295, 285, 300, 293, 334, 296, 336];
+
+function neonStrokeRing(c, points, color, pulse, baseWidth) {
+  if (!points || points.length < 2) return;
+  c.beginPath();
+  c.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) c.lineTo(points[i].x, points[i].y);
+
+  c.strokeStyle = rgba(color, 0.20 * pulse);
+  c.lineWidth = baseWidth * 6.0;
+  c.stroke();
+
+  c.strokeStyle = rgba(color, 0.45 * pulse);
+  c.lineWidth = baseWidth * 2.8;
+  c.stroke();
+
+  c.strokeStyle = rgba(color, 1.0 * pulse);
+  c.lineWidth = baseWidth;
+  c.stroke();
+
+  c.strokeStyle = `rgba(255,255,255,${0.75 * pulse})`;
+  c.lineWidth = Math.max(0.8, baseWidth * 0.4);
+  c.stroke();
+}
+
+function drawNeon(c, fc, colors, I) {
+  const t = performance.now() / 500;
+  const pulse = 0.85 + 0.15 * Math.sin(t);
+
+  c.save();
+  c.globalAlpha = I;
+  c.lineJoin = 'round';
+  c.lineCap = 'round';
+  c.globalCompositeOperation = 'lighter';
+
+  const facePts  = FACE_OVAL.map(i => c.__p ? c.__p[i] : null);
+  const faceCol  = colors.face;
+  const eyeCol   = colors.eyes;
+  const mouthCol = colors.mouth;
+
+  const baseFace  = Math.max(1.6, fc.fw * 0.012);
+  const baseEye   = Math.max(1.0, fc.fw * 0.008);
+  const baseMouth = Math.max(1.0, fc.fw * 0.009);
+
+  // Face — desenhamos com landmarks brutos do próprio contexto (fora do sistema local)
+  // como neon contorna o rosto, é mais fiel ao pixel.
+  const ringFace = c.__p ? FACE_OVAL.map(i => c.__p[i]).filter(Boolean) : null;
+  if (ringFace) {
+    c.save();
+    c.setTransform(c.getTransform());
+    neonStrokeRing(c, ringFace, faceCol, pulse, baseFace);
+    c.restore();
+  }
+
+  withFace(c, fc, () => {
+    const ringEyeL = EYE_LEFT_LOOP.map(i => c.__p && c.__p[i]).filter(Boolean);
+    const ringEyeR = EYE_RIGHT_LOOP.map(i => c.__p && c.__p[i]).filter(Boolean);
+    const ringMouth = MOUTH_OUTER.map(i => c.__p && c.__p[i]).filter(Boolean);
+    const browL = BROW_LEFT.map(i => c.__p && c.__p[i]).filter(Boolean);
+    const browR = BROW_RIGHT.map(i => c.__p && c.__p[i]).filter(Boolean);
+
+    neonStrokeRing(c, ringEyeL, eyeCol, pulse, baseEye);
+    neonStrokeRing(c, ringEyeR, eyeCol, pulse, baseEye);
+    neonStrokeRing(c, ringMouth, mouthCol, pulse, baseMouth);
+    neonStrokeRing(c, browL, faceCol, pulse, baseEye * 0.9);
+    neonStrokeRing(c, browR, faceCol, pulse, baseEye * 0.9);
+  });
+
+  c.restore();
+}
+
+/* =========================================================================
+   Captura
+   ========================================================================= */
+$btnCapture.addEventListener('click', async () => {
+  if (state.capturing) return;
+  state.capturing = true;
+  $btnCapture.disabled = true;
+  try {
+    if (state.timer > 0) await runCountdown(state.timer);
+    await doCapture();
+  } catch (err) {
+    console.error('[capture]', err);
+    toast('Falha ao capturar a foto.', true);
+  } finally {
+    state.capturing = false;
+    $btnCapture.disabled = false;
+  }
+});
+
+function runCountdown(n) {
+  return new Promise((resolve) => {
+    let count = n;
+    $countdown.classList.add('show');
+    $countdown.textContent = String(count);
+    const tick = () => {
+      count--;
+      if (count > 0) {
+        $countdown.textContent = String(count);
+        $countdown.classList.remove('show');
+        void $countdown.offsetWidth;
+        $countdown.classList.add('show');
+        setTimeout(tick, 1000);
+      } else {
+        $countdown.classList.remove('show');
+        resolve();
+      }
+    };
+    setTimeout(tick, 1000);
+  });
+}
+
+function computeOutputSize(srcW, srcH) {
+  const longSide = Math.max(srcW, srcH);
+  const shortSide = Math.min(srcW, srcH);
+  let scale = 1;
+  if (longSide > CAPTURE_MAX_SIDE) scale = CAPTURE_MAX_SIDE / longSide;
+  if (shortSide * scale < MIN_CAPTURE_SHORT_SIDE) {
+    const up = MIN_CAPTURE_SHORT_SIDE / shortSide;
+    scale = Math.min(Math.max(scale, up), CAPTURE_MAX_SIDE / longSide || up);
+  }
+  return {
+    width: Math.max(1, Math.round(srcW * scale)),
+    height: Math.max(1, Math.round(srcH * scale))
+  };
+}
+
+async function snapshotFrame() {
+  if (state.staticImage) {
+    const img = state.staticImage;
+    return { source: img, srcW: img.width, srcH: img.height };
+  }
+  if ($video.videoWidth && $video.videoHeight) {
+    try {
+      const bmp = await createImageBitmap($video);
+      return { source: bmp, srcW: bmp.width, srcH: bmp.height, bitmap: true };
+    } catch {
+      return { source: $video, srcW: $video.videoWidth, srcH: $video.videoHeight };
+    }
+  }
+  return null;
+}
+
+async function doCapture() {
+  const snap = await snapshotFrame();
+  if (!snap) { toast('Sem imagem para capturar', true); return; }
+
+  const { width: outW, height: outH } = computeOutputSize(snap.srcW, snap.srcH);
+
+  const out = document.createElement('canvas');
+  out.width = outW;
+  out.height = outH;
+  const octx = out.getContext('2d', { alpha: false });
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = 'high';
+  octx.fillStyle = '#000';
+  octx.fillRect(0, 0, outW, outH);
+
+  const fit = fitCover(snap.srcW, snap.srcH, outW, outH);
+  octx.save();
+  if (state.mirror) { octx.translate(outW, 0); octx.scale(-1, 1); }
+  try {
+    octx.drawImage(snap.source, fit.dx, fit.dy, fit.dw, fit.dh);
+  } catch (err) {
+    console.error('[doCapture] drawImage falhou', err);
+    if (snap.bitmap) snap.source.close?.();
+    toast('Falha ao desenhar a foto.', true);
+    return;
+  }
+  octx.restore();
+  if (snap.bitmap) snap.source.close?.();
+
+  if (state.faces.length > 0) {
+    // reset de suavização na captura evita puxar histórico da prévia
+    resetSmoothing();
+    for (const face of state.faces) {
+      const pts = landmarksToStage(face, snap.srcW, snap.srcH, outW, outH, state.mirror);
+      drawFilter(octx, pts, outW, outH, state);
+    }
+  } else {
+    toast('Nenhum rosto detectado — salvando sem filtro', true);
+  }
+
+  $flash.classList.remove('fire');
+  void $flash.offsetWidth;
+  $flash.classList.add('fire');
+
+  const dataUrl = out.toDataURL('image/png');
+  showResult(dataUrl);
+}
+
+function showResult(dataUrl) {
+  $resultImg.src = dataUrl;
+  $resultImg.dataset.url = dataUrl;
+  $resultModal.classList.add('open');
+  document.getElementById('btn-download').focus({ preventScroll: true });
+}
+function closeResult() {
+  $resultModal.classList.remove('open');
+  $resultImg.removeAttribute('src');
+  delete $resultImg.dataset.url;
+}
+
+document.getElementById('btn-download').addEventListener('click', () => {
+  const url = $resultImg.dataset.url;
+  if (!url) return;
+  const a = document.createElement('a');
+  a.href = url;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  a.download = `fantasia-${stamp}.png`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  toast('Download iniciado');
+});
+document.getElementById('btn-again').addEventListener('click', closeResult);
+document.getElementById('btn-close-result').addEventListener('click', closeResult);
+$resultModal.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeResult();
+});
+
+/* ------------------------------- Init ---------------------------------- */
+window.addEventListener('beforeunload', stopCamera);
+window.addEventListener('pagehide', stopCamera);
+
+if (location.protocol === 'file:') {
+  setTimeout(() => {
+    if (!state.running) {
+      toast('Para a câmera funcionar, abra via https:// ou http://localhost', true);
+    }
+  }, 900);
+}
+</script>
+</body>
+</html>
